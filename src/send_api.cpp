@@ -111,7 +111,7 @@ Result Controller::Dispatch(const std::string& authorization, const std::string&
         for (const char* known : {"wechat_module_missing","module_path_failed","wechat_module_hash_mismatch",
             "module_version_failed","wechat_version_not_4_1_10_27","module_header_failed","module_architecture_failed",
             "function_address_not_executable","data_address_not_readable","send_context_unavailable",
-            "image_requires_local_absolute_path","image_file_invalid","image_header_invalid",
+            "image_requires_local_absolute_path","image_path_not_stable","image_file_invalid","image_header_invalid",
             "image_format_unsupported","image_hash_mismatch","file_size_invalid","file_read_failed",
             "file_changed","hash_failed","guid_failed"})
             if (code == known) return {422,"not_attempted",code};

@@ -118,16 +118,17 @@ std::uint64_t Module(const Approval& approval)
 }
 
 struct NativePrepared : PreparedCall {
-    Handle image_file;
+    LockedImage image_file;
     Arena arena{process_heap};
     Addresses address;
     NativeInvoker invoke;
     Frame frame;
-    NativePrepared(const Request& request, std::uint64_t base, const Addresses& a, Handle&& image, std::uint64_t size)
+    NativePrepared(const Request& request, std::uint64_t base, const Addresses& a, LockedImage&& image)
         : image_file(std::move(image)), address(a), invoke(base), frame(BuildFrame(arena,address,request.recipient,
-            request.kind == "text" ? request.value : "", request.kind == "image" ? &request.unicode : nullptr,
-            size, request.kind == "image" ? Guid() : "")) {}
+            request.kind == "text" ? request.value : "", request.kind == "image" ? &image_file.path : nullptr,
+            image_file.size, request.kind == "image" ? Guid() : "")) {}
     Result Run() override {
+        image_file.RetainOnNativeEntry();
         const auto result = ExecuteFrame(arena,frame,address,invoke);
         const char* error = result == FrameResult::unconfirmed ? "native_result_not_delivery_receipt"
             : result == FrameResult::constructor_fault ? "text_constructor_fault_no_retry"
@@ -161,31 +162,92 @@ std::string HashOpenFile(HANDLE file, std::uint64_t maximum)
     return result;
 }
 
-HANDLE OpenImage(const Request& request, std::uint64_t& size)
+LockedImage::~LockedImage()
+{
+    if (retained) return;
+    if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+    for (auto parent = parents.rbegin(); parent != parents.rend(); ++parent) CloseHandle(*parent);
+}
+
+LockedImage::LockedImage(LockedImage&& other) noexcept
+    : file(other.file), parents(std::move(other.parents)), path(std::move(other.path)),
+      size(other.size), retained(other.retained)
+{
+    other.file = INVALID_HANDLE_VALUE;
+    other.parents.clear();
+}
+
+namespace {
+void CheckImagePathHandle(HANDLE file, const std::wstring& expected, bool directory)
+{
+    BY_HANDLE_FILE_INFORMATION attributes{};
+    wchar_t final_path[32768]{};
+    if (file == INVALID_HANDLE_VALUE || GetFileType(file) != FILE_TYPE_DISK
+        || !GetFileInformationByHandle(file,&attributes)
+        || (attributes.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+        || !!(attributes.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != directory)
+        throw std::runtime_error("image_path_not_stable");
+    const auto length = GetFinalPathNameByHandleW(file,final_path,32768,FILE_NAME_NORMALIZED|VOLUME_NAME_GUID);
+    if (!length || length >= 32768 || _wcsicmp(final_path,expected.c_str()) != 0)
+        throw std::runtime_error("image_path_not_stable");
+}
+}
+
+LockedImage OpenImage(const Request& request)
 {
     const auto& path = request.unicode;
     if (path.size() < 4 || !((path[0] >= u'A' && path[0] <= u'Z') || (path[0] >= u'a' && path[0] <= u'z'))
         || path[1] != u':' || path[2] != u'\\' || path.find(u'/',0) != std::u16string::npos
         || path.find(u':',2) != std::u16string::npos || path.find(u"..") != std::u16string::npos)
         throw std::runtime_error("image_requires_local_absolute_path");
-    Handle file(CreateFileW(reinterpret_cast<const wchar_t*>(path.c_str()),GENERIC_READ,FILE_SHARE_READ,
-                           nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
-    BY_HANDLE_FILE_INFORMATION attributes{};
+    // 不把用户的盘符路径传入微信：卷 GUID 不随盘符/SUBST 映射变化。
+    const std::wstring drive{static_cast<wchar_t>(path[0]),L':',L'\\'};
+    wchar_t volume[64]{};
+    if (GetDriveTypeW(drive.c_str()) != DRIVE_FIXED
+        || !GetVolumeNameForVolumeMountPointW(drive.c_str(),volume,64)
+        || GetDriveTypeW(volume) != DRIVE_FIXED) throw std::runtime_error("image_path_not_stable");
+    std::wstring stable(volume);
+    LockedImage image;
+    image.parents.reserve(64);
+    // 从稳定的卷根开始锁住再向下走；不先遍历后补锁，防止检查本身出现 TOCTOU。
+    auto lock_parent = [&] {
+        if (image.parents.size() >= 64) throw std::runtime_error("image_path_not_stable");
+        // 仅 FILE_READ_ATTRIBUTES 不参加 Windows 的数据共享检查，不能形成这把锁。
+        Handle parent(CreateFileW(stable.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
+        CheckImagePathHandle(parent.value,stable,true);
+        image.parents.push_back(parent.value);
+        parent.value = INVALID_HANDLE_VALUE;
+    };
+    lock_parent();
+    for (std::size_t start = 3; start < path.size();) {
+        const auto end = path.find(u'\\',start);
+        const auto part = path.substr(start,end == std::u16string::npos ? end : end-start);
+        if (part.empty() || part == u"." || part == u".." || part.back() == u'.' || part.back() == u' ')
+            throw std::runtime_error("image_path_not_stable");
+        if (stable.back() != L'\\') stable += L'\\';
+        stable.append(part.begin(),part.end());
+        if (end == std::u16string::npos) break;
+        lock_parent();
+        start = end+1;
+        if (start == path.size()) throw std::runtime_error("image_path_not_stable");
+    }
+    if (stable.size() > 4096) throw std::runtime_error("image_path_not_stable");
+    image.path.assign(stable.begin(),stable.end());
+    image.file = CreateFileW(stable.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+    CheckImagePathHandle(image.file,stable,false);
     LARGE_INTEGER length{};
-    if (file.value == INVALID_HANDLE_VALUE || GetFileType(file.value) != FILE_TYPE_DISK
-        || !GetFileInformationByHandle(file.value,&attributes)
-        || (attributes.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_REPARSE_POINT))
-        || !GetFileSizeEx(file.value,&length) || length.QuadPart <= 0 || length.QuadPart > 20*1024*1024)
+    if (!GetFileSizeEx(image.file,&length) || length.QuadPart <= 0 || length.QuadPart > 20*1024*1024)
         throw std::runtime_error("image_file_invalid");
     unsigned char head[8]{}; DWORD read = 0;
-    if (!ReadFile(file.value,head,8,&read,nullptr) || read < 3) throw std::runtime_error("image_header_invalid");
+    if (!ReadFile(image.file,head,8,&read,nullptr) || read < 3) throw std::runtime_error("image_header_invalid");
     const unsigned char png[8] = {137,80,78,71,13,10,26,10};
     if (!(read == 8 && std::memcmp(head,png,8) == 0) && !(head[0] == 255 && head[1] == 216 && head[2] == 255)
         && !(head[0] == 'B' && head[1] == 'M')) throw std::runtime_error("image_format_unsupported");
-    if (HashOpenFile(file.value,20*1024*1024) != request.image_sha256) throw std::runtime_error("image_hash_mismatch");
-    size = static_cast<std::uint64_t>(length.QuadPart);
-    const auto handle = file.value; file.value = INVALID_HANDLE_VALUE;
-    return handle;
+    if (HashOpenFile(image.file,20*1024*1024) != request.image_sha256) throw std::runtime_error("image_hash_mismatch");
+    image.size = static_cast<std::uint64_t>(length.QuadPart);
+    return image;
 }
 
 std::unique_ptr<PreparedCall> WindowsBackend::Prepare(const Request& request, const Approval& approval)
@@ -196,8 +258,7 @@ std::unique_ptr<PreparedCall> WindowsBackend::Prepare(const Request& request, co
     SIZE_T read = 0;
     if (!ReadProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(base+offset::param2),&address.context,8,&read)
         || read != 8 || !address.context || !MemoryRange(address.context,8,false)) throw std::runtime_error("send_context_unavailable");
-    std::uint64_t size = 0;
-    Handle image(request.kind == "image" ? OpenImage(request,size) : INVALID_HANDLE_VALUE);
-    return std::make_unique<NativePrepared>(request,base,address,std::move(image),size);
+    auto image = request.kind == "image" ? OpenImage(request) : LockedImage{};
+    return std::make_unique<NativePrepared>(request,base,address,std::move(image));
 }
 } // namespace send_fix

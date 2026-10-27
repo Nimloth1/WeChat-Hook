@@ -163,19 +163,20 @@ int main()
             auto body = json{{"request_id","offline-image-0001"},{"wxidorgid","wxid_offline_fixture"},
                 {"path",utf8},{"image_sha256",Sha256(image.data(),image.size())}}.dump();
             auto request = ParseRequest("image",body);
-            std::uint64_t size = 0; auto file = OpenImage(request,size);
-            Check(file != INVALID_HANDLE_VALUE && size == image.size());
+            {
+            auto file = OpenImage(request);
+            Check(file.file != INVALID_HANDLE_VALUE && file.size == image.size());
             auto writer = CreateFileW(name.c_str(),GENERIC_WRITE,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr);
             Check(writer == INVALID_HANDLE_VALUE); if (writer != INVALID_HANDLE_VALUE) CloseHandle(writer);
-            CloseHandle(file);
+            }
             request.image_sha256 = std::string(64,'0'); bool failed = false;
-            try { CloseHandle(OpenImage(request,size)); } catch (...) { failed = true; } Check(failed);
+            try { auto rejected = OpenImage(request); } catch (...) { failed = true; } Check(failed);
             for (const auto& path : {std::string("relative.png"),std::string("\\\\server\\image.png"),std::string("C:\\..\\x.png")}) {
                 request.value = path; request.unicode = Utf16(path); failed = false;
-                try { CloseHandle(OpenImage(request,size)); } catch (...) {failed = true;} Check(failed);
+                try { auto rejected = OpenImage(request); } catch (...) {failed = true;} Check(failed);
             }
             Write(name,"GIF89a fixture"); request.value = utf8; request.unicode = Utf16(utf8); failed = false;
-            try { CloseHandle(OpenImage(request,size)); } catch (...) {failed = true;} Check(failed);
+            try { auto rejected = OpenImage(request); } catch (...) {failed = true;} Check(failed);
         }
         {
             // 真正生产后端在没有微信模块时必须停止；不主动 LoadLibrary 微信。
