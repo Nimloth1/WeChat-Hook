@@ -36,6 +36,7 @@ contact_lookup::Sqlite Api()
 }
 struct Fixture {
     sqlite3* db=nullptr;
+    bool ready=false;
     explicit Fixture(bool legacy=false) {
         Check(sqlite3_open(":memory:",&db)==SQLITE_OK,"fixture open");
         Exec(legacy ? "CREATE TABLE Contact(UserName TEXT,NickName TEXT,Remark TEXT,Alias TEXT)"
@@ -43,8 +44,9 @@ struct Fixture {
         Exec("BEGIN"); // Fixture owns this transaction; the core must not manage it.
     }
     ~Fixture() { Check(sqlite3_next_stmt(db,nullptr)==nullptr,"statements finalized"); sqlite3_close(db); }
-    void Exec(const char* sql) { Check(sqlite3_exec(db,sql,nullptr,nullptr,nullptr)==SQLITE_OK,"fixture SQL"); }
+    void Exec(const char* sql) { ready=false; Check(sqlite3_exec(db,sql,nullptr,nullptr,nullptr)==SQLITE_OK,"fixture SQL"); }
     void Add(const char* id,const char* nickname,const char* remark,const char* alias="") {
+        ready=false;
         sqlite3_stmt* s=nullptr;
         Check(sqlite3_prepare_v2(db,"INSERT INTO contact VALUES(?1,?2,?3,?4)",-1,&s,nullptr)==SQLITE_OK,"insert prepare");
         int n=0;
@@ -55,11 +57,19 @@ struct Fixture {
         Check(sqlite3_step(s)==SQLITE_DONE,"insert step");
         sqlite3_finalize(s);
     }
+    void Ready() {
+        if (ready) return;
+        // Only our fixture owns these writes. Production must never commit host data.
+        if (!sqlite3_get_autocommit(db)) Exec("COMMIT");
+        Exec("BEGIN");
+        ready=true;
+    }
     contact_lookup::Result Find() {
+        Ready();
         auto api=Api();
         const auto before=sqlite3_total_changes(db);
         const auto result=contact_lookup::Find(api,db);
-        Check(sqlite3_total_changes(db)==before,"query does not write rows");
+        Check(sqlite3_total_changes(db)==before,"total_changes unchanged (not proof of pending-data preservation)");
         return result;
     }
 };
@@ -195,6 +205,95 @@ void SnapshotTests()
         Check(std::filesystem::remove_all(directory)>0,"synthetic database and WAL cleaned");
     }
 }
+
+// Process-local allocator fault; all connections/threads are closed before installation.
+// Never configure the allocator of a host application or a real WeChat process.
+sqlite3_mem_methods original_allocator{};
+bool deny_allocations=false;
+int allocation_faults=0;
+void* FaultMalloc(int size)
+{
+    if (deny_allocations) { ++allocation_faults; return nullptr; }
+    return original_allocator.xMalloc(size);
+}
+void* FaultRealloc(void* pointer,int size)
+{
+    if (deny_allocations) { ++allocation_faults; return nullptr; }
+    return original_allocator.xRealloc(pointer,size);
+}
+void ErrorTransactionTests()
+{
+    Check(sqlite3_shutdown()==SQLITE_OK,"shut down test SQLite before allocator hook");
+    Check(sqlite3_config(SQLITE_CONFIG_GETMALLOC,&original_allocator)==SQLITE_OK,"read test allocator");
+    auto allocator=original_allocator;
+    allocator.xMalloc=FaultMalloc;
+    allocator.xRealloc=FaultRealloc;
+    Check(sqlite3_config(SQLITE_CONFIG_MALLOC,&allocator)==SQLITE_OK,"install test allocator");
+    for (const char* schema:{"none","main","temp","extra"}) for (bool inject:{false,true}) {
+        sqlite3* db=nullptr;
+        Check(sqlite3_open(":memory:",&db)==SQLITE_OK,"error fixture open");
+        Check(sqlite3_db_config(db,SQLITE_DBCONFIG_LOOKASIDE,nullptr,0,0)==SQLITE_OK,"disable test lookaside");
+        const auto exec=[&](const std::string& sql) {
+            Check(sqlite3_exec(db,sql.c_str(),nullptr,nullptr,nullptr)==SQLITE_OK,"error fixture SQL");
+        };
+        exec("PRAGMA encoding='UTF-16le'; ATTACH ':memory:' AS extra; "
+             "CREATE TABLE contact(username TEXT,nick_name TEXT,remark TEXT,alias TEXT); "
+             "INSERT INTO contact VALUES('wxid_fixture','金浩枫','','nonempty_alias')");
+        const std::string table=std::string(schema==std::string("none") ? "main" : schema)+".caller_state";
+        exec("CREATE TABLE "+table+"(v); INSERT INTO "+table+" VALUES(1); BEGIN");
+        const bool pending=std::string(schema)!="none";
+        // Deliberate contract violations show the risk; never allowed in a real adapter.
+        if (pending) exec("INSERT INTO "+table+" VALUES(7)");
+        const auto count=[&]() {
+            sqlite3_stmt* statement=nullptr;
+            const auto sql="SELECT count(*) FROM "+table;
+            Check(sqlite3_prepare_v2(db,sql.c_str(),-1,&statement,nullptr)==SQLITE_OK,"error count prepare");
+            Check(sqlite3_step(statement)==SQLITE_ROW,"error count row");
+            const auto value=sqlite3_column_int(statement,0);
+            Check(sqlite3_finalize(statement)==SQLITE_OK,"error count finalize");
+            return value;
+        };
+        const auto before=count();
+        const auto changes=sqlite3_total_changes(db);
+        allocation_faults=0;
+        auto api=Api();
+        if (inject) {
+            api.text=[](void* pointer,int column) {
+                auto statement=static_cast<sqlite3_stmt*>(pointer);
+                if (column==3 && std::strstr(sqlite3_sql(statement),"SELECT username,")) deny_allocations=true;
+                return sqlite3_column_text(statement,column);
+            };
+            api.bytes=[](void* pointer,int column) {
+                const auto result=sqlite3_column_bytes(static_cast<sqlite3_stmt*>(pointer),column);
+                deny_allocations=false;
+                return result;
+            };
+        }
+        const auto result=contact_lookup::Find(api,db);
+        deny_allocations=false;
+        const auto after=count();
+        const auto autocommit=sqlite3_get_autocommit(db);
+        std::cout<<"error_transaction pending="<<schema<<" inject="<<inject<<" before="<<before
+            <<" after="<<after<<" autocommit="<<autocommit<<" allocation_faults="<<allocation_faults
+            <<" state="<<result.state<<" error="<<result.error<<'\n';
+        Check(before==(pending ? 2 : 1),"fixture pending count");
+        Check(sqlite3_total_changes(db)==changes,"change counter cannot prove pending write survival");
+        if (inject) {
+            Check(allocation_faults>0 && result.state=="failed" && result.candidates.empty(),"real NOMEM returns failure without candidates");
+            Check(after==1 || (pending && after==2),"committed fixture row survives; pending row may rollback");
+            if (!pending) Check(after==1,"compliant read context has no pending data to lose");
+            // Error rollback is SQLite/version dependent; log rather than promise preservation.
+            if (after<before) Check(autocommit!=0,"automatic rollback observed");
+        } else {
+            Check(result.state=="candidate_needs_confirmation" && result.candidates.size()==1,"error-free control");
+            Check(after==before && autocommit==0,"normal control keeps caller transaction");
+        }
+        Check(sqlite3_next_stmt(db,nullptr)==nullptr,"error statements finalized");
+        Check(sqlite3_close(db)==SQLITE_OK,"error fixture close");
+    }
+    Check(sqlite3_shutdown()==SQLITE_OK,"shut down test SQLite before allocator restore");
+    Check(sqlite3_config(SQLITE_CONFIG_MALLOC,&original_allocator)==SQLITE_OK,"restore test allocator");
+}
 }
 int main()
 {
@@ -210,6 +309,7 @@ int main()
         f.Add("wxid_synthetic_only","another",Target,"synthetic_alias");
         f.Add("wxid_unrelated","unrelated","unrelated");
         int denied=0;
+        f.Ready();
         Check(sqlite3_set_authorizer(f.db,DenyWrites,&denied)==SQLITE_OK,"install fixture read-only authorizer");
         const auto r=f.Find();
         if (r.state=="failed") std::cerr<<Json(r).dump()<<'\n';
@@ -230,28 +330,28 @@ int main()
     }
     { Fixture f; f.Exec("DROP TABLE contact; CREATE VIEW contact AS SELECT 'x' AS username"); Check(f.Find().error=="contact_table_unsupported","reject views"); }
     { Fixture f; f.Exec("DROP TABLE contact; CREATE TABLE contact(username TEXT,nick TEXT,remark TEXT)"); Check(f.Find().error=="contact_schema_unsupported","unknown schema fails closed"); }
-    { Fixture f; f.Add("wxid_x",Target,""); auto api=Api(); api.readonly=[](void*){return 0;}; Check(Find(api,f.db).error=="statement_policy_failed","statement read-only enforced"); }
-    { Fixture f; f.Add("wxid_x",Target,""); auto api=Api(); api.bind=[](void*,int,const char*,int,void(*)(void*)){return SQLITE_RANGE;}; Check(Find(api,f.db).error=="bind_failed","bind error fails closed"); }
-    { Fixture f; auto api=Api(); api.prepare=[](void* db,const char* sql,int size,void** stmt,const char** tail){
+    { Fixture f; f.Add("wxid_x",Target,""); f.Ready(); auto api=Api(); api.readonly=[](void*){return 0;}; Check(Find(api,f.db).error=="statement_policy_failed","statement read-only enforced"); }
+    { Fixture f; f.Add("wxid_x",Target,""); f.Ready(); auto api=Api(); api.bind=[](void*,int,const char*,int,void(*)(void*)){return SQLITE_RANGE;}; Check(Find(api,f.db).error=="bind_failed","bind error fails closed"); }
+    { Fixture f; f.Ready(); auto api=Api(); api.prepare=[](void* db,const char* sql,int size,void** stmt,const char** tail){
         const auto rc=sqlite3_prepare_v2(static_cast<sqlite3*>(db),sql,size,reinterpret_cast<sqlite3_stmt**>(stmt),tail);
         *tail="; SELECT 1";
         return rc;
       }; Check(Find(api,f.db).error=="statement_policy_failed","reject nonempty statement tail"); }
-    { Fixture f; auto api=Api(); api.prepare=[](void*,const char*,int,void**,const char**){return SQLITE_ERROR;}; Check(Find(api,f.db).error=="prepare_failed","prepare error fails closed"); }
+    { Fixture f; f.Ready(); auto api=Api(); api.prepare=[](void*,const char*,int,void**,const char**){return SQLITE_ERROR;}; Check(Find(api,f.db).error=="prepare_failed","prepare error fails closed"); }
     { Fixture f; f.Add("wxid_x",Target,"", "\xff"); Check(f.Find().state=="failed","invalid UTF-8 exposes no candidate"); }
     { Fixture f; f.Add("wxid_x",Target,""); f.Exec("UPDATE contact SET alias='a'||char(0)||'b'"); Check(f.Find().error=="embedded_nul","embedded NUL rejects"); }
     { Fixture f; const std::string large(4097,'x'); f.Add("wxid_x",Target,"",large.c_str()); Check(f.Find().error=="column_budget_exceeded","column budget rejects"); }
     { Fixture f; f.Add("wxid_x",Target,""); f.Exec("CREATE TEMP TABLE contact(secret TEXT)"); Check(f.Find().candidates.size()==1,"main schema cannot be shadowed by temp contact"); }
-    { Fixture f; auto api=Api(); api.step=[](void*){return SQLITE_BUSY;}; Check(Find(api,f.db).error=="step_failed_5","BUSY is not empty success"); }
-    { Fixture f; auto api=Api(); api.bind=nullptr; Check(Find(api,f.db).error=="sqlite_api_incomplete","missing API fails"); }
-    { Fixture f; f.Add("wxid_x",Target,""); auto api=Api(); api.finalize=[](void* s){sqlite3_finalize(static_cast<sqlite3_stmt*>(s));return SQLITE_IOERR;}; Check(Find(api,f.db).error=="finalize_failed","finalize error propagated"); }
-    { Fixture f; auto api=Api(); api.autocommit=nullptr; Check(Find(api,f.db).error=="sqlite_api_incomplete","missing snapshot check fails closed"); }
+    { Fixture f; f.Ready(); auto api=Api(); api.step=[](void*){return SQLITE_BUSY;}; Check(Find(api,f.db).error=="step_failed_5","BUSY is not empty success"); }
+    { Fixture f; f.Ready(); auto api=Api(); api.bind=nullptr; Check(Find(api,f.db).error=="sqlite_api_incomplete","missing API fails"); }
+    { Fixture f; f.Add("wxid_x",Target,""); f.Ready(); auto api=Api(); api.finalize=[](void* s){sqlite3_finalize(static_cast<sqlite3_stmt*>(s));return SQLITE_IOERR;}; Check(Find(api,f.db).error=="finalize_failed","finalize error propagated"); }
+    { Fixture f; f.Ready(); auto api=Api(); api.autocommit=nullptr; Check(Find(api,f.db).error=="sqlite_api_incomplete","missing snapshot check fails closed"); }
     { Fixture f; f.Exec("ROLLBACK"); auto api=Api(); Check(Find(api,f.db).error=="caller_transaction_required","autocommit rejected"); Check(sqlite3_get_autocommit(f.db)!=0,"core never starts transaction"); }
     { Fixture f; f.Exec("PRAGMA read_uncommitted=1"); const auto result=f.Find(); Check(result.error=="read_uncommitted_not_allowed" && result.candidates.empty(),"nonisolated connection refused"); Check(sqlite3_get_autocommit(f.db)==0,"rejection keeps caller transaction"); }
-    { Fixture f; f.Exec("CREATE TABLE caller_state(v); INSERT INTO caller_state VALUES(7); DROP TABLE contact"); Check(f.Find().state=="failed","query failure fixture"); Check(sqlite3_get_autocommit(f.db)==0,"error must not rollback caller transaction"); sqlite3_stmt* s=nullptr; Check(sqlite3_prepare_v2(f.db,"SELECT v FROM caller_state",-1,&s,nullptr)==SQLITE_OK,"caller state readable"); Check(sqlite3_step(s)==SQLITE_ROW && sqlite3_column_int(s,0)==7,"caller uncommitted changes preserved"); sqlite3_finalize(s); }
-    { Fixture f; auto api=Api(); api.finalize=[](void* s){auto db=sqlite3_db_handle(static_cast<sqlite3_stmt*>(s));auto rc=sqlite3_finalize(static_cast<sqlite3_stmt*>(s));sqlite3_exec(db,"ROLLBACK",nullptr,nullptr,nullptr);return rc;}; Check(Find(api,f.db).error=="caller_transaction_required","lost transaction fails closed at boundary"); }
+    { Fixture f; f.Ready(); auto api=Api(); api.finalize=[](void* s){auto db=sqlite3_db_handle(static_cast<sqlite3_stmt*>(s));auto rc=sqlite3_finalize(static_cast<sqlite3_stmt*>(s));sqlite3_exec(db,"ROLLBACK",nullptr,nullptr,nullptr);return rc;}; Check(Find(api,f.db).error=="caller_transaction_required","lost transaction fails closed at boundary"); }
     SnapshotTests();
     ControllerTests();
+    ErrorTransactionTests();
     std::cout<<"contact_lookup_tests: "<<checks<<" checks passed (synthetic SQLite only)\n";
     return 0;
 }

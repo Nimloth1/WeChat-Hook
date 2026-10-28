@@ -28,7 +28,10 @@ struct Result {
 };
 // Caller exclusively owns/synchronizes the connection and holds an explicit transaction
 // unchanged for the whole call. The core refuses autocommit/read_uncommitted; it never
-// starts, commits, rolls back or replaces the caller's transaction.
+// issues transaction-control SQL. SQLite errors may themselves end/roll back a transaction.
+// Adapter must prove NO pending writes anywhere on this connection (main/attached/temp)
+// and no writes during the call; the core cannot establish this from autocommit/readonly.
+// After any failure, caller must re-check transaction state; never retry/replay host writes.
 Result Find(Sqlite& api, void* database);
 nlohmann::json Json(const Result& result);
 struct Backend {
