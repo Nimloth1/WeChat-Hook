@@ -274,6 +274,7 @@ void InitRealDll()
 /* =========================
    劫持入口（与 version 一致）
    ========================= */
+#if !defined(WECHAT_HOOK_SEND_ONLY)
 void CustomInit(HMODULE hModule)
 {
     g_hWeixinExe = GetModuleHandleW(L"weixin.exe");
@@ -285,3 +286,4 @@ void CustomInit(HMODULE hModule)
 
     Evt_WeixinLoad();
 }
+#endif

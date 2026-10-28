@@ -1,3 +1,8 @@
+> 本分支的 DLL 离线发送候选只使用 `build/build-send-fix.ps1` 构建，默认锁住发送。
+> 原 Visual Studio 工程仍保留上游全功能实现，不是本次候选的构建入口。
+> 文字/图片已做离线验证；真实微信兼容性未验证，普通文件/PDF 不支持。
+> 请先阅读 [改动、验证与风险说明](docs/send-fix-review.md)，真实首条须经用户明确批准。
+
 # WeChat-Hook
  
 Windows 微信 Hook DLL，当前版本以 `version.dll` 代理方式加载，在微信主进程中启动本地 HTTP 服务，提供消息发送、XML 转发、图片解码、个人资料读取和数据库查询接口。
