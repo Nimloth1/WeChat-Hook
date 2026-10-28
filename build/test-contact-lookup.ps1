@@ -18,6 +18,10 @@ $commands=@(
  ('cl.exe /nologo /std:c++17 /EHsc /utf-8 /MD /O2 /W4 /I include /I "'+$sqlite+'\include" tests\contact_lookup_tests.cpp src\contact_lookup.cpp /Fe:artifacts\contact-lookup\contact_lookup_tests.exe /Fo:artifacts\contact-lookup\ /link /LIBPATH:"'+$sqlite+'\lib" sqlite3.lib'),
  'if errorlevel 1 exit /b 1',
  'artifacts\contact-lookup\contact_lookup_tests.exe',
+ 'if errorlevel 1 exit /b 1',
+ ('cl.exe /nologo /std:c++17 /EHsc /utf-8 /MD /O2 /W4 /I include /I "'+$sqlite+'\include" tests\contact_adapter_feasibility.cpp src\contact_lookup.cpp /Fe:artifacts\contact-lookup\contact_adapter_feasibility.exe /Fo:artifacts\contact-lookup\ /link /LIBPATH:"'+$sqlite+'\lib" sqlite3.lib'),
+ 'if errorlevel 1 exit /b 1',
+ 'artifacts\contact-lookup\contact_adapter_feasibility.exe',
  'exit /b %errorlevel%'
 )
 [IO.File]::WriteAllText($batch,($commands -join "`r`n")+"`r`n",[Text.ASCIIEncoding]::new())
