@@ -2774,10 +2774,23 @@ socket_t create_socket(const std::string &host, const std::string &ip, int port,
       return sock;
     }
 
+#ifdef _WIN32
+    // Preserve the failed bind/connect error across cleanup.
+    const auto socket_error = WSAGetLastError();
+#endif
     close_socket(sock);
+#ifdef _WIN32
+    WSASetLastError(socket_error);
+#endif
   }
 
+#ifdef _WIN32
+  const auto socket_error = WSAGetLastError();
+#endif
   freeaddrinfo(result);
+#ifdef _WIN32
+  WSASetLastError(socket_error);
+#endif
   return INVALID_SOCKET;
 }
 
