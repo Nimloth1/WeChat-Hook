@@ -19,12 +19,16 @@ struct Sqlite {
     const unsigned char* (*text)(void*, int);
     int (*bytes)(void*, int);
     int (*finalize)(void*);
+    int (*autocommit)(void*);
 };
 struct Candidate { std::string id, nickname, remark, alias; };
 struct Result {
     std::string state, error;
     std::vector<Candidate> candidates;
 };
+// Caller exclusively owns/synchronizes the connection and holds an explicit transaction
+// unchanged for the whole call. The core refuses autocommit/read_uncommitted; it never
+// starts, commits, rolls back or replaces the caller's transaction.
 Result Find(Sqlite& api, void* database);
 nlohmann::json Json(const Result& result);
 struct Backend {

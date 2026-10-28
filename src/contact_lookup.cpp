@@ -7,8 +7,10 @@
 namespace contact_lookup {
 namespace {
 using Rows = std::vector<std::vector<std::string>>;
-Rows Read(Sqlite& api, void* db, const char* sql, bool bind, int columns, std::size_t limit, bool table_info=false)
+enum class Shape { normal, table_info, integer_metadata };
+Rows Read(Sqlite& api, void* db, const char* sql, bool bind, int columns, std::size_t limit, Shape shape=Shape::normal)
 {
+    if (api.autocommit(db)!=0) throw std::runtime_error("caller_transaction_required");
     void* statement = nullptr;
     const char* tail = nullptr;
     const auto prepared = api.prepare(db,sql,-1,&statement,&tail);
@@ -18,7 +20,7 @@ Rows Read(Sqlite& api, void* db, const char* sql, bool bind, int columns, std::s
     } cleanup{api,statement};
     if (prepared != 0 || !statement) throw std::runtime_error("prepare_failed");
     if (!tail || *tail || api.readonly(statement) != 1 || api.parameters(statement) != (bind ? 1 : 0)
-        || api.columns(statement) != (table_info ? 6 : columns)) throw std::runtime_error("statement_policy_failed");
+        || api.columns(statement) != (shape==Shape::table_info ? 6 : columns)) throw std::runtime_error("statement_policy_failed");
     // SQLITE_STATIC is safe: Target has static storage and remains valid until finalization.
     if (bind && api.bind(statement,1,Target,static_cast<int>(sizeof(Target)-1),nullptr) != 0)
         throw std::runtime_error("bind_failed");
@@ -31,10 +33,10 @@ Rows Read(Sqlite& api, void* db, const char* sql, bool bind, int columns, std::s
         std::vector<std::string> row;
         for (int col=0; col<columns; ++col) {
             // table_info's six fields include integer metadata; only copy name/type (1/2).
-            const auto index=table_info ? col+1 : col;
+            const auto index=shape==Shape::table_info ? col+1 : col;
             const int type=api.type(statement,index);
             if (type == 5) { row.emplace_back(); continue; }
-            if (type != 3) throw std::runtime_error("column_type_invalid");
+            if (type != (shape==Shape::integer_metadata ? 1 : 3)) throw std::runtime_error("column_type_invalid");
             const auto text=api.text(statement,index);
             const auto bytes=api.bytes(statement,index);
             if (bytes < 0 || bytes > 4096 || (!text && bytes)) throw std::runtime_error("column_budget_exceeded");
@@ -47,6 +49,7 @@ Rows Read(Sqlite& api, void* db, const char* sql, bool bind, int columns, std::s
     const auto finalized=api.finalize(statement);
     cleanup.value=nullptr;
     if (finalized != 0) throw std::runtime_error("finalize_failed");
+    if (api.autocommit(db)!=0) throw std::runtime_error("caller_transaction_required");
     return rows;
 }
 std::string Lower(std::string value)
@@ -67,15 +70,19 @@ Result Find(Sqlite& api, void* database)
 {
     try {
         if (!database || !api.prepare || !api.readonly || !api.parameters || !api.bind || !api.step
-            || !api.columns || !api.type || !api.text || !api.bytes || !api.finalize)
+            || !api.columns || !api.type || !api.text || !api.bytes || !api.finalize || !api.autocommit)
             throw std::runtime_error("sqlite_api_incomplete");
+        // This is a read of connection state, never a PRAGMA assignment. Keep a snapshot
+        // across all subsequent statements without changing a borrowed connection's transaction.
+        const auto isolation=Read(api,database,"PRAGMA read_uncommitted",false,1,1,Shape::integer_metadata);
+        if (isolation.size()!=1 || isolation[0][0]!="0") throw std::runtime_error("read_uncommitted_not_allowed");
         // Require an ordinary main-schema table, not a view or virtual table.
         const auto tables=Read(api,database,
             "SELECT type,sql FROM main.sqlite_master WHERE name='contact' COLLATE NOCASE LIMIT 2",false,2,2);
         if (tables.size()!=1 || tables[0][0]!="table" || Lower(tables[0][1]).rfind("create table",0)!=0)
             throw std::runtime_error("contact_table_unsupported");
         const auto schema=Read(api,database,
-            "PRAGMA main.table_info('contact')",false,2,65,true);
+            "PRAGMA main.table_info('contact')",false,2,65,Shape::table_info);
         if (schema.empty() || schema.size()>64) throw std::runtime_error("contact_schema_unsupported");
         std::vector<std::string> names;
         for (const auto& col:schema) names.push_back(Lower(col[0]));

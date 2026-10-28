@@ -12,6 +12,10 @@ VW12/VW11 不被测试访问，微信不用退出、重开或重新登录。
 
 - `Find(Sqlite&, void*)` 只查询固定姓名“金浩枫”，不接受数据库名、表名、任意 SQL 或其他姓名。
 - 只通过精简 SQLite 函数表查询；没有 open/exec/backup/key、写操作或发送函数。
+- 调用方必须独占/同步地持有连接和一个在整次调用中不变的显式事务。核心用
+  `get_autocommit` 在每条语句前后拒绝 autocommit，并只读检查 `read_uncommitted=0`。
+  第一次 schema SELECT 建立 main 库读取快照，后续校验和候选查询沿用它。
+  核心不执行 BEGIN/COMMIT/ROLLBACK/SAVEPOINT，也不接管或结束调用方的事务。
 - 先确认 main schema 中存在普通 `contact` 表，拒绝视图、虚拟表、未知字段组合。
 - 支持两组字段：`username/nick_name/remark/alias` 与 `UserName/NickName/Remark/Alias`。
   这是待适配的两种已知结构，**不代表已核实 VW12 的真实结构**。
@@ -44,9 +48,15 @@ VW12/VW11 不被测试访问，微信不用退出、重开或重新登录。
    进程内 CAS **不是**完整授权方案：没有过期检查或跨实例/跨重启去重，不可单独用作上线入口。
 6. 后台没有安全取消能力时不能靠杀线程实现超时，也不能改写微信共享连接的 progress handler。
    必须明确卡住后的处置和账号风险，禁止自动重试。
+7. 调用方提供跨全部语句的稳定读取快照：显式事务保持不变，`read_uncommitted` 关闭；
+   整次调用中同一连接不得有其他 DDL、事务控制或状态修改。仅有可用句柄及互斥锁不够。
 
-`Find` 的调用前提是：适配器提供**有效且在整个调用期间由调用方可靠持有并同步的连接**和正确的函数表。
+`Find` 的调用前提是：适配器提供**有效且在整个调用期间由调用方可靠持有并同步的连接**、
+正确的函数表和保持不变的显式事务；不能由另一个线程或回调在同一连接上提交/回滚后重新开启事务。
 离线测试只在自己创建、自己持有的 SQLite 连接上满足这个前提；没有证明真实微信能满足它。
+`get_autocommit` 可以拒绝没有事务或已丢失事务的调用，但不能替代对连接独占性/事务所有权的证明。
+SQLite 的跨连接隔离和自动提交语义见 [isolation](https://sqlite.org/isolation.html) 与
+[get_autocommit](https://sqlite.org/c3ref/get_autocommit.html)；核心只读取隔离设置，不改共享连接状态。
 
 ## 边界与资源
 
@@ -80,9 +90,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File build\test-contact-looku
 
 构建脚本仅允许 PW，5分钟超时、采样2GiB进程树工作集上限、10GiB磁盘保留；
 超限终止构建进程树。采样保护不是硬内存配额。
-合成测试使用内存 SQLite 数据库，涵盖两类结构、空结果/重名/超量、主 schema 与 temp 遮蔽、
+合成测试主要使用内存 SQLite 数据库；跨连接DDL回归使用临时目录中的微型WAL数据库，
+每个场景关闭连接后清理数据库和sidecar。涵盖两类结构、空结果/重名/超量、主 schema 与 temp 遮蔽、
 字段预算/UTF-8/NUL、语句只读、错误退出、关闭 statement、请求门禁及16路并发单次进入。
-测试自己连接上的 authorizer 会拒绝所有写操作，只允许读取和固定 table_info 元数据读取；
+测试自己连接上的 authorizer 会拒绝所有写操作，只允许读取、固定 table_info 和 read_uncommitted 查询；
 这不是要求未来改写微信共享连接的 authorizer。
 
 ## 审查重点
@@ -90,10 +101,25 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File build\test-contact-looku
 请先审查固定查询范围、SQL只读与错误处理、候选身份的不确定性，以及以上进程内接入前提是否充分。
 本 PR 只请求对离线核心的审核；即使合并，也不会把查询功能加到现有 DLL 中。
 
-## 本轮实际结果
+## 首次提交验证（90cd59b）
 
 - PM 系统 SQLite：311项合成断言通过，ASan/UBSan通过。
 - PW MSVC v142、SQLite 3.33.0：311项合成断言通过；7.5秒，采样峰值进程树工作集177,967,104字节。
 - PW旧SQLite首次初始化表值PRAGMA会被测试授权器以内部schema更新拒绝；独立内存数据库已复现。
   已改用固定 `PRAGMA main.table_info`，没有放宽写操作权限。
 - 没有构建DLL、读取真实数据库或密钥；真实微信线程、句柄生命周期、ABI与账号风险仍未验证。
+
+## P2 跨语句快照修复
+
+原始版本在每条语句结束后释放隐式读取事务，另一个连接可以在校验后把表替换成视图。
+审查报告中的两个窗口均已在原90cd59b核心重现：table_info结束后，以及最终SELECT第一次step之前。
+原版本均返回替换视图中的候选并执行观察用UDF一次；调用方显式事务的对照读取旧快照，UDF零次。
+
+修复选择要求并检查调用方事务，避免擅自开关借用连接的事务。新版拒绝没有显式事务、
+read_uncommitted开启或语句边界事务已结束的调用；持有事务时，两个DDL替换窗口均不能改变本次查询对象。
+后续新事务可看到替换后的视图，并正确拒绝它。失败路径也不会回滚调用方已有的未提交数据。
+这些测试只证明合成 SQLite 的行为，不证明未来微信适配器能够满足上述前提。
+
+修复后 PM SQLite 3.51.0 的427项断言及 ASan/UBSan通过；PW MSVC v142、SQLite 3.33.0
+同样通过427项断言（6.9秒，采样峰值260,415,488字节）。两版本的替换视图观察函数调用均为零。
+427包含夹具创建/清理等断言，不代表427个独立业务场景；初始311项结果只对应90cd59b。
