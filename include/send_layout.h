@@ -119,7 +119,7 @@ struct Addresses {
     std::uint64_t image_vtable2 = 0;
     std::uint64_t param1_vtable = 0;
     std::uint64_t param2_vtables[3]{};
-    std::uint64_t context = 0;
+    std::uint64_t context = 0; // Opaque argument-six value, not a pointer to dereference.
 };
 
 struct Frame {
