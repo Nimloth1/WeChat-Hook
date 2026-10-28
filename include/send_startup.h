@@ -18,6 +18,6 @@ enum class LoaderStage : LONG {
 enum class WorkerStage : LONG {
     not_entered=0, entered=10, approval_read=20, routes_ready=30, binding=40,
     bound=50, listen_entered=60, listen_returned=70, bind_failed=100,
-    allocation_failed=110, standard_exception=120, unknown_exception=130, system_exception=140
+    allocation_failed=110, standard_exception=120, unknown_exception=130, system_exception=140, listen_failed=150
 };
 } // namespace send_fix

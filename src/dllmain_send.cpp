@@ -51,7 +51,13 @@ DWORD WINAPI RunSendServer(void*)
         }
         Worker(send_fix::WorkerStage::bound);
         Worker(send_fix::WorkerStage::listen_entered);
-        server->listen_after_bind();
+        if (!server->listen_after_bind()) {
+            const auto winsock=WSAGetLastError();
+            const auto win32=GetLastError();
+            LastErrors(win32,winsock);
+            Worker(send_fix::WorkerStage::listen_failed);
+            return 2;
+        }
         Worker(send_fix::WorkerStage::listen_returned);
     } catch (const std::bad_alloc&) {
         Worker(send_fix::WorkerStage::allocation_failed); return 3;
