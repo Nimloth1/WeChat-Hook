@@ -1,4 +1,5 @@
 #include "send_native.h"
+#include "send_context.h"
 #include "global.h"
 #include <bcrypt.h>
 #include <objbase.h>
@@ -255,9 +256,10 @@ std::unique_ptr<PreparedCall> WindowsBackend::Prepare(const Request& request, co
     const auto base = Module(approval);
     Addresses address{base+offset::txt_message_vtbl,base+offset::img_msg_vtbl,base+offset::img_msg_vtb2,
         base+offset::param1_vtable,{base+offset::param2_1,base+offset::param2_2,base+offset::param2_3},0};
-    SIZE_T read = 0;
-    if (!ReadProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(base+offset::param2),&address.context,8,&read)
-        || read != 8 || !address.context || !MemoryRange(address.context,8,false)) throw std::runtime_error("send_context_unavailable");
+    address.context = ReadSendContextValue(base+offset::param2,
+        [](std::uint64_t slot,void* value,std::size_t size,std::size_t& read) {
+            return ReadProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(slot),value,size,&read) != FALSE;
+        });
     auto image = request.kind == "image" ? OpenImage(request) : LockedImage{};
     return std::make_unique<NativePrepared>(request,base,address,std::move(image));
 }
