@@ -2774,10 +2774,23 @@ socket_t create_socket(const std::string &host, const std::string &ip, int port,
       return sock;
     }
 
+#ifdef _WIN32
+    // Preserve the failed bind/connect error across cleanup.
+    const auto socket_error = WSAGetLastError();
+#endif
     close_socket(sock);
+#ifdef _WIN32
+    WSASetLastError(socket_error);
+#endif
   }
 
+#ifdef _WIN32
+  const auto socket_error = WSAGetLastError();
+#endif
   freeaddrinfo(result);
+#ifdef _WIN32
+  WSASetLastError(socket_error);
+#endif
   return INVALID_SOCKET;
 }
 
@@ -5768,6 +5781,9 @@ inline int Server::bind_internal(const std::string &host, int port,
 
 inline bool Server::listen_internal() {
   auto ret = true;
+#ifdef _WIN32
+  int listen_error = 0;
+#endif
   is_running_ = true;
   auto se = detail::scope_exit([&]() { is_running_ = false; });
 
@@ -5790,6 +5806,9 @@ inline bool Server::listen_internal() {
       socket_t sock = accept(svr_sock_, nullptr, nullptr);
 
       if (sock == INVALID_SOCKET) {
+#ifdef _WIN32
+        const auto accept_error = WSAGetLastError();
+#endif
         if (errno == EMFILE) {
           // The per-process limit of open file descriptors has been reached.
           // Try to accept new connections after a short sleep.
@@ -5799,6 +5818,9 @@ inline bool Server::listen_internal() {
           continue;
         }
         if (svr_sock_ != INVALID_SOCKET) {
+#ifdef _WIN32
+          listen_error = accept_error;
+#endif
           detail::close_socket(svr_sock_);
           ret = false;
         } else {
@@ -5843,6 +5865,10 @@ inline bool Server::listen_internal() {
     task_queue->shutdown();
   }
 
+#ifdef _WIN32
+  // Socket close and task queue teardown may overwrite the accept failure.
+  if (!ret) { WSASetLastError(listen_error); }
+#endif
   return ret;
 }
 
