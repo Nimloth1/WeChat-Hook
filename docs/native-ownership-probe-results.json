@@ -62,7 +62,7 @@
     "elapsed_seconds": 99.407
   },
   "full_run_process_sampled_peak_bytes": 350445568,
-  "full_run_note": "Before final same-length synthetic-recipient literal replacement; all other test logic identical. No actual recipient lookup, I/O or sending.",
+  "full_run_note": "Before final same-length synthetic-recipient literal replacement; all other test logic identical. No actual recipient lookup, image I/O or sending.",
   "final_source_sha256": "c5626ce9f9b9c28a9c35a9e76cd92b3e7ecc7dd9ec117638e639c0d43eab04b4",
   "final_source_recheck": {
     "checks": 224,
