@@ -26,11 +26,13 @@ Approval Permit(const std::string& body = Body()) {
 struct FakeBackend : Backend {
     std::atomic<int> prepare{0},run{0};
     int failure = 0;
+    std::function<void()> on_prepare, on_run;
     struct Call : PreparedCall {
         FakeBackend& parent;
         explicit Call(FakeBackend& p) : parent(p) {}
         Result Run() override {
             ++parent.run;
+            if (parent.on_run) parent.on_run();
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
             if (parent.failure == 3) throw std::runtime_error("fixture_native_fault");
             // 故意尝试虚报成功，controller 必须强制保持 unconfirmed。
@@ -39,6 +41,7 @@ struct FakeBackend : Backend {
     };
     std::unique_ptr<PreparedCall> Prepare(const Request&,const Approval&) override {
         ++prepare;
+        if (on_prepare) on_prepare();
         if (failure == 1) throw std::bad_alloc();
         if (failure == 2) throw std::runtime_error("fixture_preflight_failure");
         return std::make_unique<Call>(*this);
@@ -60,9 +63,17 @@ void Write(const std::filesystem::path& path,const std::string& bytes) {
     if (!file) throw std::runtime_error("fixture_write_failed");
 }
 json PermitJson(const Approval& a) {
-    return {{"version",1},{"enabled",true},{"token",a.token},{"request_id",a.request_id},
+    return {{"version",a.version},{"enabled",true},{"token",a.token},{"request_id",a.request_id},
         {"recipient",a.recipient},{"kind",a.kind},{"payload_sha256",a.payload_sha256},
         {"module_sha256",a.module_sha256},{"expires_utc",a.expires}};
+}
+
+std::string GroupBody(const std::string& id,const std::string& text = u8"合成正文：不发送真实微信") {
+    return json{{"request_id",id},{"wxidorgid","1234567890@chatroom"},{"msg",text}}.dump();
+}
+Approval GroupPermit(const std::string& body,const std::string& kind = "text") {
+    const auto request = ParseRequest(kind,body);
+    return {true,fixture_token,request.id,request.recipient,kind,Fingerprint(request),std::string(64,'f'),0,2};
 }
 
 int main()
@@ -73,7 +84,7 @@ int main()
         const std::string auth = "Bearer "+fixture_token;
         {
             FakeBackend backend; int consumed = 0;
-            Controller controller({},backend,[&](const Approval&) { ++consumed; return true; });
+            Controller controller(Approval{},backend,[&](const Approval&) { ++consumed; return true; });
             Check(controller.Dispatch(auth,"text",Body()).http == 423);
             Check(backend.prepare == 0 && backend.run == 0 && consumed == 0);
         }
@@ -120,6 +131,154 @@ int main()
             Check(c.Dispatch(auth,"text",Body("different content")).http == 409 && backend.run == 1);
         }
         TempDir temp;
+        {
+            // 无倒计时必须显式选择 v2，且仍限一个准确的群、请求和内容摘要。
+            auto a = GroupPermit(GroupBody("offline-hot-text-0001"));
+            Check(ApprovalLifetimeValid(a));
+            Check(a.expires == 0 && a.version == 2);
+            for (const auto& recipient : {"filehelper","wxid_fixture","abc@chatroom","@chatroom","123@chatroom.extra"}) {
+                auto invalid = a; invalid.recipient = recipient; Check(!ApprovalLifetimeValid(invalid));
+            }
+            auto invalid = a; invalid.expires = std::time(nullptr)+300; Check(!ApprovalLifetimeValid(invalid));
+            invalid = a; invalid.expires = -1; Check(!ApprovalLifetimeValid(invalid));
+            invalid = a; invalid.version = 1; Check(!ApprovalLifetimeValid(invalid));
+            invalid = a; invalid.version = 3; Check(!ApprovalLifetimeValid(invalid));
+            const auto path = temp.path/L"v2-policy.json";
+            Write(path,PermitJson(a).dump()); Check(LoadApproval(path.wstring()).enabled);
+            for (int variant=0;variant<4;++variant) {
+                auto value = PermitJson(a);
+                if (variant == 0) value["version"] = 1;
+                if (variant == 1) value["expires_utc"] = std::time(nullptr)+1;
+                if (variant == 2) value["recipient"] = "filehelper";
+                if (variant == 3) value["enabled"] = false;
+                Write(path,value.dump()); Check(!LoadApproval(path.wstring()).enabled);
+            }
+        }
+        {
+            // 同一个 controller 从无许可开始，读取 A，再读取不同正文 B；不重建对象/进程。
+            const auto path = temp.path/L"hot-sequence.json";
+            const auto first = GroupBody("offline-hot-text-0001",u8"第一条，😀");
+            const auto second = GroupBody("offline-hot-text-0002",u8"第二条，不同正文");
+            int loads = 0; FakeBackend backend;
+            Controller c([&] { ++loads; return LoadApproval(path.wstring()); },backend,
+                [&](const Approval& a) { return ConsumeApproval(path.wstring(),a); });
+            Check(loads == 0); // 构造时没有读取许可。
+            Check(c.Dispatch(auth,"text",first).http == 423 && backend.run == 0);
+            Write(path,PermitJson(GroupPermit(first)).dump());
+            auto state = c.Status(); Check(state.configured && !state.consumed && !state.busy);
+            backend.on_run = [&] {
+                AuthorizationState busy;
+                std::thread observer([&] { busy = c.Status(); }); observer.join();
+                Check(busy.busy && busy.consumed);
+            };
+            Check(c.Dispatch(auth,"text",first).http == 202 && backend.run == 1);
+            Check(!c.Status().configured && c.Status().consumed);
+            Check(c.Dispatch(auth,"text",first).http == 423 && backend.run == 1);
+            Write(path,PermitJson(GroupPermit(second)).dump());
+            state = c.Status(); Check(state.configured && !state.consumed);
+            Check(c.Dispatch(auth,"text",first).http == 403 && backend.run == 1);
+            Check(c.Dispatch(auth,"text",second).http == 202 && backend.run == 2);
+            Write(path,PermitJson(GroupPermit(first)).dump()); // 旧请求恢复到文件也不能重放。
+            Check(c.Dispatch(auth,"text",first).http == 423 && backend.run == 2);
+            Controller restarted([&] { return LoadApproval(path.wstring()); },backend,
+                [&](const Approval& a) { return ConsumeApproval(path.wstring(),a); });
+            Check(restarted.Dispatch(auth,"text",first).http == 423 && backend.run == 2);
+            Check(loads >= 8);
+        }
+        {
+            // 原来启动时缓存快照的负对照：更新文件并不能让同一 controller 接受新许可。
+            const auto path = temp.path/L"cached-negative.json";
+            const auto first = GroupBody("offline-old-text-0001");
+            const auto second = GroupBody("offline-old-text-0002",u8"新正文");
+            Write(path,PermitJson(GroupPermit(first)).dump()); FakeBackend backend;
+            Controller cached(LoadApproval(path.wstring()),backend,
+                [&](const Approval& a) { return ConsumeApproval(path.wstring(),a); });
+            Check(cached.Dispatch(auth,"text",first).http == 202);
+            Write(path,PermitJson(GroupPermit(second)).dump());
+            Check(cached.Dispatch(auth,"text",second).http == 409 && backend.run == 1);
+        }
+        {
+            const auto path = temp.path/L"hot-revoke.json";
+            const auto body = GroupBody("offline-revoke-0001");
+            auto a = GroupPermit(body); Write(path,PermitJson(a).dump()); FakeBackend backend;
+            Controller c([&] { return LoadApproval(path.wstring()); },backend,
+                [&](const Approval& p) { return ConsumeApproval(path.wstring(),p); });
+            Check(c.Status().configured);
+            std::filesystem::remove(path);
+            Check(!c.Status().configured && c.Dispatch(auth,"text",body).http == 423 && backend.run == 0);
+            Write(path,"{"); Check(c.Dispatch(auth,"text",body).http == 423 && backend.run == 0);
+            a.token = std::string(40,'b'); Write(path,PermitJson(a).dump());
+            Check(c.Dispatch(auth,"text",body).http == 403 && backend.run == 0);
+            Check(c.Dispatch("Bearer "+a.token,"text",body).http == 202 && backend.run == 1);
+        }
+        {
+            const auto path = temp.path/L"hot-replace-during-prepare.json";
+            const auto first = GroupBody("offline-replace-0001");
+            const auto second = GroupBody("offline-replace-0002",u8"替换后的单条许可");
+            Write(path,PermitJson(GroupPermit(first)).dump()); FakeBackend backend;
+            Controller c([&] { return LoadApproval(path.wstring()); },backend,
+                [&](const Approval& p) { return ConsumeApproval(path.wstring(),p); });
+            backend.on_prepare = [&] { Write(path,PermitJson(GroupPermit(second)).dump()); };
+            Check(c.Dispatch(auth,"text",first).http == 423 && backend.run == 0);
+            Check(!std::filesystem::exists(path.wstring()+L".used-offline-replace-0001"));
+            backend.on_prepare = {};
+            Check(c.Dispatch(auth,"text",second).http == 202 && backend.run == 1);
+        }
+        {
+            FakeBackend backend;
+            Controller c([]()->Approval { throw std::runtime_error("fixture_load_failure"); },backend,
+                [](const Approval&) { return true; });
+            Check(!c.Status().configured);
+            Check(c.Dispatch(auth,"text",GroupBody("offline-load-failure-0001")).http == 423 && backend.prepare == 0);
+        }
+        {
+            // 同一未重启实例先文字后图片，并发/跨 controller 仍只消耗每个请求一次。
+            const auto path = temp.path/L"hot-concurrent.json";
+            const auto first = GroupBody("offline-concurrent-0001");
+            const auto image = json{{"request_id","offline-concurrent-0002"},{"wxidorgid","1234567890@chatroom"},
+                {"path","C:\\offline\\synthetic.png"},{"image_sha256",std::string(64,'a')}}.dump();
+            Write(path,PermitJson(GroupPermit(first)).dump());
+            FakeBackend backend;
+            auto load = [&] { return LoadApproval(path.wstring()); };
+            auto consume = [&](const Approval& p) { return ConsumeApproval(path.wstring(),p); };
+            Controller c(load,backend,consume), other(load,backend,consume);
+            std::vector<std::thread> callers;
+            for (int i=0;i<32;++i) callers.emplace_back([&,i] { (i%2 ? c : other).Dispatch(auth,"text",first); });
+            for (auto& thread:callers) thread.join();
+            Check(backend.run == 1);
+            Write(path,PermitJson(GroupPermit(image,"image")).dump());
+            Check(!c.Status().consumed && c.Status().configured);
+            Check(c.Dispatch(auth,"image",image).http == 202 && backend.run == 2);
+            Check(c.Dispatch(auth,"image",image).http == 423 && backend.run == 2);
+        }
+        {
+            // 实际 loopback HTTP：保持同一个监听器和 controller，依次批准两条新正文。
+            const auto path = temp.path/L"hot-http.json";
+            FakeBackend backend;
+            Controller c([&] { return LoadApproval(path.wstring()); },backend,
+                [&](const Approval& p) { return ConsumeApproval(path.wstring(),p); });
+            httplib::Server server; RegisterSendRoutes(server,c);
+            const auto port = server.bind_to_any_port("127.0.0.1"); Check(port > 0);
+            std::thread listener([&] {server.listen_after_bind();}); server.wait_until_ready();
+            httplib::Client client("127.0.0.1",port);
+            client.set_connection_timeout(2,0); client.set_read_timeout(3,0);
+            const httplib::Headers headers{{"Authorization",auth}};
+            const auto before = client.Get("/QueryDB/status");
+            bool passed = before && before->status == 200
+                && json::parse(before->body)["ApprovalReload"] == "per_request"
+                && json::parse(before->body)["NativeResourceReclamationVerified"] == false
+                && json::parse(before->body)["RetainedParameterBytes"] == 0
+                && json::parse(before->body)["SendApprovalConfigured"] == false;
+            for (int i=0;i<2;++i) {
+                const auto body = GroupBody("offline-http-hot-000"+std::to_string(i),u8"合成中文消息"+std::to_string(i));
+                Write(path,PermitJson(GroupPermit(body)).dump());
+                const auto sent = client.Post("/SendTextMsg",headers,body,"application/json");
+                const auto duplicate = client.Post("/SendTextMsg",headers,body,"application/json");
+                passed = passed && sent && sent->status == 202 && duplicate && duplicate->status == 423;
+            }
+            server.stop(); listener.join();
+            Check(passed && backend.run == 2);
+        }
         {
             const auto path = temp.path/L"send-approval.json";
             Check(!LoadApproval(path.wstring()).enabled);
@@ -214,7 +373,7 @@ int main()
             Check(oversized && oversized->status == 413 && backend.run == 1);
         }
         {
-            FakeBackend backend; Controller locked({},backend,[](const Approval&) {return true;});
+            FakeBackend backend; Controller locked(Approval{},backend,[](const Approval&) {return true;});
             httplib::Server server; RegisterSendRoutes(server,locked);
             const auto port = server.bind_to_any_port("127.0.0.1"); Check(port > 0);
             std::thread listener([&] {server.listen_after_bind();}); server.wait_until_ready();

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <vector>
+#include <new>
 
 namespace send_fix {
 namespace {
@@ -21,11 +22,18 @@ struct HashScope {
     BCRYPT_HASH_HANDLE hash = nullptr;
     ~HashScope() { if (hash) BCryptDestroyHash(hash); if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0); }
 };
-struct WinHeap : Heap {
-    void* Allocate(std::size_t bytes) override { return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bytes); }
-    void Free(void* pointer) noexcept override { HeapFree(GetProcessHeap(), 0, pointer); }
+struct NativeModuleReference {
+    HMODULE value = nullptr;
+    std::atomic<bool> retained{false};
+    ~NativeModuleReference() { if (value && !retained.load()) FreeLibrary(value); }
 };
-WinHeap process_heap;
+
+RetentionBudget& NativeRetentionBudget()
+{
+    // 进程共用，不能通过更换许可、controller 或 backend 重置。
+    static RetentionBudget budget(16 * 1024 * 1024,256);
+    return budget;
+}
 
 // SEH 仅隔离私有调用异常，不能证明被调用函数没有破坏进程或已发送消息。
 bool CallInit(std::uint64_t function, std::uint64_t object)
@@ -47,16 +55,18 @@ bool CallSubmit(std::uint64_t function, std::uint64_t arg1, std::uint64_t arg2)
     __try { reinterpret_cast<Function>(function)(arg1,arg2); return true; }
     __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
-struct NativeInvoker : Invoker {
-    std::uint64_t base;
-    explicit NativeInvoker(std::uint64_t module) : base(module) {}
-    bool RetainsArguments() const override { return true; }
-    bool InitText(std::uint64_t object) override { return CallInit(base+offset::txt_message_ctr,object); }
-    bool CreateParams(std::uint64_t out,std::uint64_t n0,std::uint64_t n1,std::uint64_t n2,std::uint64_t scratch,std::uint64_t context) override {
-        return CallCreate(base+offset::create_param2,out,n0,n1,n2,scratch,context);
-    }
-    bool Submit(std::uint64_t a,std::uint64_t b) override { return CallSubmit(base+offset::send_message,a,b); }
-};
+bool CallAllocate(std::uint64_t function, std::size_t bytes, void*& out)
+{
+    using Function = void*(__fastcall*)(std::size_t);
+    __try { out = reinterpret_cast<Function>(function)(bytes); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { out = nullptr; return false; }
+}
+bool CallClone(std::uint64_t function, std::uint64_t object, std::uint64_t* out)
+{
+    using Function = void*(__fastcall*)(std::uint64_t,std::uint64_t*);
+    __try { reinterpret_cast<Function>(function)(object,out); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
 
 std::string Guid()
 {
@@ -79,10 +89,11 @@ bool MemoryRange(std::uint64_t pointer, std::size_t bytes, bool executable)
     return !executable || (info.Protect & (PAGE_EXECUTE|PAGE_EXECUTE_READ|PAGE_EXECUTE_READWRITE|PAGE_EXECUTE_WRITECOPY));
 }
 
-std::uint64_t Module(const Approval& approval)
+std::uint64_t Module(const Approval& approval,HMODULE module)
 {
-    const auto module = GetModuleHandleW(L"Weixin.dll");
     if (!module) throw std::runtime_error("wechat_module_missing");
+    if (approval.module_sha256 != "f487e4f56930456a25fb0d7b058c77e2dcd364e268d49bdfff4dc0e3be26ba36")
+        throw std::runtime_error("native_ownership_module_not_supported");
     wchar_t path[32768]{};
     const auto length = GetModuleFileNameW(module,path,32768);
     if (!length || length >= 32768) throw std::runtime_error("module_path_failed");
@@ -108,7 +119,8 @@ std::uint64_t Module(const Approval& approval)
     const auto nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base+dos->e_lfanew);
     if (nt->Signature != IMAGE_NT_SIGNATURE || nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64)
         throw std::runtime_error("module_architecture_failed");
-    for (auto relative : {offset::create_param2,static_cast<std::uint64_t>(offset::txt_message_ctr),offset::send_message})
+    for (auto relative : {offset::create_param2,static_cast<std::uint64_t>(offset::txt_message_ctr),offset::send_message,
+        std::uint64_t(0x680d0fc),std::uint64_t(0x680d138),std::uint64_t(0x1678000)})
         if (relative >= nt->OptionalHeader.SizeOfImage || !MemoryRange(base+relative,16,true))
             throw std::runtime_error("function_address_not_executable");
     for (auto relative : {offset::param1_vtable,offset::param2,offset::param2_1,offset::param2_2,offset::param2_3,
@@ -118,27 +130,18 @@ std::uint64_t Module(const Approval& approval)
     return base;
 }
 
-struct NativePrepared : PreparedCall {
-    LockedImage image_file;
-    Arena arena{process_heap};
-    Addresses address;
-    NativeInvoker invoke;
-    Frame frame;
-    NativePrepared(const Request& request, std::uint64_t base, const Addresses& a, LockedImage&& image)
-        : image_file(std::move(image)), address(a), invoke(base), frame(BuildFrame(arena,address,request.recipient,
-            request.kind == "text" ? request.value : "", request.kind == "image" ? &image_file.path : nullptr,
-            image_file.size, request.kind == "image" ? Guid() : "")) {}
-    Result Run() override {
-        image_file.RetainOnNativeEntry();
-        const auto result = ExecuteFrame(arena,frame,address,invoke);
-        const char* error = result == FrameResult::unconfirmed ? "native_result_not_delivery_receipt"
-            : result == FrameResult::constructor_fault ? "text_constructor_fault_no_retry"
-            : result == FrameResult::constructor_layout_unknown ? "text_constructor_layout_unknown_no_retry"
-            : result == FrameResult::params_fault ? "parameter_constructor_fault_no_retry" : "submit_fault_no_retry";
-        return {202,"unconfirmed",error,true};
-    }
-};
+#include "send_ownership.inc"
+
 } // namespace
+
+RetentionUsage WindowsBackend::Retention() {
+    auto usage=NativeRetentionBudget().Usage();
+    if (auto runtime=existing_ownership.load()) {
+        usage.pending_owners=runtime->Pending();
+        usage.ownership_fault=runtime->Poisoned();
+    }
+    return usage;
+}
 
 std::string HashOpenFile(HANDLE file, std::uint64_t maximum)
 {
@@ -253,7 +256,10 @@ LockedImage OpenImage(const Request& request)
 
 std::unique_ptr<PreparedCall> WindowsBackend::Prepare(const Request& request, const Approval& approval)
 {
-    const auto base = Module(approval);
+    // 哈希校验到最后一份观察记录结束之间，保护晚到的原生析构/释放代码。
+    auto module=std::make_shared<NativeModuleReference>();
+    if (!GetModuleHandleExW(0,L"Weixin.dll",&module->value)) throw std::runtime_error("wechat_module_missing");
+    const auto base = Module(approval,module->value);
     Addresses address{base+offset::txt_message_vtbl,base+offset::img_msg_vtbl,base+offset::img_msg_vtb2,
         base+offset::param1_vtable,{base+offset::param2_1,base+offset::param2_2,base+offset::param2_3},0};
     address.context = ReadSendContextValue(base+offset::param2,
@@ -261,6 +267,6 @@ std::unique_ptr<PreparedCall> WindowsBackend::Prepare(const Request& request, co
             return ReadProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(slot),value,size,&read) != FALSE;
         });
     auto image = request.kind == "image" ? OpenImage(request) : LockedImage{};
-    return std::make_unique<NativePrepared>(request,base,address,std::move(image));
+    return std::make_unique<NativePrepared>(request,base,address,std::move(image),NativeRetentionBudget(),std::move(module));
 }
 } // namespace send_fix

@@ -136,6 +136,34 @@ int main()
             ExecuteFrame(arena,frame,address,call);
         }
         Check(!retained.live.empty());
+        // 原生对象交给配对析构前，验证大字符串的原始分配指针和完整容量。
+        for (auto length : {15,16,4094,4095,4096,32768}) {
+            TestHeap heap;
+            {
+                Arena arena(heap);
+                auto value=MakeNarrow(arena,std::string(length,'n'),true);
+                if(value.capacity>=15 && length>15) {
+                    value.data.heap[value.capacity]=0;
+                    if(value.capacity+1>=4096) {
+                        void* raw=nullptr;std::memcpy(&raw,value.data.heap-8,sizeof(raw));
+                        Check(heap.live.count(raw)==1 && (reinterpret_cast<std::uintptr_t>(value.data.heap)&31)==0);
+                    } else Check(heap.live.count(value.data.heap)==1);
+                }
+            }
+            Check(heap.live.empty());
+        }
+        for(bool image:{false,true}) {
+            TestHeap heap;
+            {
+                Arena arena(heap);std::u16string path(2100,u'图');
+                auto frame=BuildFrame(arena,address,"12345678901@chatroom","x",image?&path:nullptr,12,"offline-guid",true);
+                std::uint64_t counts=0;std::memcpy(&counts,static_cast<char*>(frame.object)+8,8);
+                Check(counts==0x100000001 && heap.live.at(frame.object)==(image?0x7c0:0x758));
+                Check(frame.state && reinterpret_cast<char*>(frame.arg2)==static_cast<char*>(frame.state)+24);
+                Check(std::memcmp(frame.state,frame.arg1+1,24)==0 && arena.Bytes()<128*1024);
+            }
+            Check(heap.live.empty());
+        }
         std::cout << "PASS send_layout checks=" << checks << "; no WeChat module or process used\n";
         return 0;
     } catch (const std::exception& error) {

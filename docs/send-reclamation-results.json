@@ -1,0 +1,177 @@
+{
+  "recorded_at_utc": "2026-10-29T08:58:23.125851+00:00",
+  "state": "production_reclamation_implemented_offline_candidate_not_deployed",
+  "normal_native_fixture": {
+    "checks": 20064,
+    "cycles": 10000,
+    "allocations": 175894,
+    "frees": 175894,
+    "peak_native_parameter_bytes": 359680,
+    "handle_delta": 0
+  },
+  "faults": [
+    {
+      "mode": "ctor-fault",
+      "checks": 8
+    },
+    {
+      "mode": "params-fault",
+      "checks": 9
+    },
+    {
+      "mode": "submit-fault",
+      "checks": 9
+    },
+    {
+      "mode": "cleanup-fault",
+      "checks": 9
+    },
+    {
+      "mode": "destroy-fault",
+      "checks": 9
+    },
+    {
+      "mode": "clone-fault",
+      "checks": 10
+    },
+    {
+      "mode": "metadata-fault",
+      "checks": 14
+    }
+  ],
+  "total_native_fixture_checks": 20132,
+  "process_samples": [
+    {
+      "Name": "ownership-build",
+      "ExitCode": 0,
+      "Seconds": 11.709210299999999,
+      "SampledPeakBytes": 213032960
+    },
+    {
+      "Name": "ownership-normal",
+      "ExitCode": 0,
+      "Seconds": 2.6565836999999997,
+      "SampledPeakBytes": 7262208
+    },
+    {
+      "Name": "ownership-ctor-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2135248,
+      "SampledPeakBytes": 5853184
+    },
+    {
+      "Name": "ownership-params-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2102282,
+      "SampledPeakBytes": 5849088
+    },
+    {
+      "Name": "ownership-submit-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2110234,
+      "SampledPeakBytes": 5840896
+    },
+    {
+      "Name": "ownership-cleanup-fault",
+      "ExitCode": 0,
+      "Seconds": 0.219133,
+      "SampledPeakBytes": 5853184
+    },
+    {
+      "Name": "ownership-destroy-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2209015,
+      "SampledPeakBytes": 5844992
+    },
+    {
+      "Name": "ownership-clone-fault",
+      "ExitCode": 0,
+      "Seconds": 0.215518,
+      "SampledPeakBytes": 5857280
+    },
+    {
+      "Name": "ownership-metadata-fault",
+      "ExitCode": 0,
+      "Seconds": 0.22054379999999998,
+      "SampledPeakBytes": 5844992
+    }
+  ],
+  "windows_regression": {
+    "layout": 257,
+    "context": 84,
+    "api": 117,
+    "image_locks": 29,
+    "retention_budget": 18,
+    "actual_preflight": 2033,
+    "proxy_exports": 17,
+    "concurrent_proxy_queries": 128,
+    "lifetime_cases": 4,
+    "startup_cases": 6,
+    "listen_cases": 2,
+    "worker_cases": 3,
+    "all_passed": true,
+    "compiler_stderr_bytes": 0
+  },
+  "mac_asan_ubsan": {
+    "layout": 257,
+    "retention_budget": 18,
+    "passed": true
+  },
+  "windows_asan_ubsan": false,
+  "build": {
+    "ExitCode": 0,
+    "ElapsedSeconds": 74.7,
+    "SampledPeakTreeBytes": 197963776,
+    "Bytes": 420352,
+    "SHA256": "3B0A1A016D7A186F21C63BE98EAACB1A17AA45BC610E843EB5B71F0F09492207",
+    "NoWeChatGuestAccess": true,
+    "SendingPermissionCreated": false
+  },
+  "candidate_sha256": "3b0a1a016d7a186f21c63be98eaacb1a17aa45bc610e843eb5b71f0f09492207",
+  "production_sources_sha256": {
+    "src/send_native.cpp": "01416b9e70065014a0199d9ae8a705f6c670f9323a40951678d22b052ff18fa0",
+    "src/send_ownership.inc": "6d45e22523cd3065aa5eae2543457ee7ae7601eea5911588b14658f1015781b2",
+    "src/send_api.cpp": "e843b2db3020f6844f32ef000fff1b5843f785dc832a41b4b64a7cd300fba883",
+    "src/send_routes.cpp": "1088658f38c18be64702c435a03451078d065588b74d7c56468581bca4669863",
+    "include/send_layout.h": "463c5f5c30fbbdda4d1a8952dd27ae91ba8d97bf84c413c955e4f1280c507434",
+    "include/send_retention.h": "e3a6a31332e870da35b5075bd1572040beaf3a6d19c46438e80684743a5717e4",
+    "include/send_native.h": "62d99695313caa376c30c15edff36632e6d9d1f356853d06139b212d0eb5a7e7",
+    "tests/send_ownership_tests.cpp": "5700d5a39d8fa491ddd2c9b02da3c448801ea5957c2ac04696e1c282c2ffe20e",
+    "tests/native_ownership_fixture.h": "8431c50094714eb80c7795d887ee2fce7513ab055582c22044586897d45639c1",
+    "tests/send_retention_tests.cpp": "5118293d94cc2402cf4680f817d478ee4cc0b7f5fb8c874c70aa144de9c97cef",
+    "tests/send_layout_tests.cpp": "8785d3e61978531c52629c701ce08ed2cd36596b0b938e8122f27ede77a780cb",
+    "build/test-native-ownership.ps1": "616d8a1fb8216eb013b443315fa247a9f0c5aa0ca04e0fe6dd717a17e708aaae"
+  },
+  "fixture": {
+    "actual_production_prepared_call": true,
+    "actual_native_instruction_bytes": true,
+    "native_sample_sha256": "f487e4f56930456a25fb0d7b058c77e2dcd364e268d49bdfff4dc0e3be26ba36",
+    "native_module_loaded": false,
+    "native_business_body_executed": false,
+    "native_language_eh_replaced": "fault_modes_only",
+    "native_eh_cleanup_verified": false,
+    "synthetic_file_read_by_test": true,
+    "real_wechat_image_io_verified": false,
+    "virtual_clone_tracking_verified": true,
+    "all_real_consumer_paths_verified": false,
+    "mac_cpu_emulation_used": false
+  },
+  "operations": {
+    "vw12": "static_disk_sample_download_and_path_discovery_only",
+    "live_wechat_process_memory_reads": 0,
+    "real_http_posts": 0,
+    "real_native_send_attempts": 0,
+    "real_permits_created": 0,
+    "deployed": false,
+    "logins_changed": false,
+    "vw11_accessed": false
+  },
+  "remaining_validation": [
+    "independent review of private reference ABI, per-object vtable wrappers and exception quarantine",
+    "real WeChat full asynchronous image consumer/clone-path coverage",
+    "real long-running cache and message-lifetime behavior",
+    "account safety not established"
+  ],
+  "temporary_sample_removed_on_pm_and_pw": true,
+  "own_fixture_dump_removed": true
+}

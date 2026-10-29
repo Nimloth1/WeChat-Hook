@@ -26,7 +26,8 @@ Approval LoadApproval(const std::wstring& path)
     try {
         const auto value = nlohmann::json::parse(bytes,bytes+read);
         if (!value.is_object() || value.size() != 9 || !value["version"].is_number_integer()
-            || value["version"] != 1 || !value["enabled"].is_boolean() || value["enabled"] != true
+            || (value["version"] != 1 && value["version"] != 2)
+            || !value["enabled"].is_boolean() || value["enabled"] != true
             || !value["expires_utc"].is_number_integer()) return {};
         for (auto key : {"token","request_id","recipient","kind","payload_sha256","module_sha256"})
             if (!value[key].is_string()) return {};
@@ -37,11 +38,11 @@ Approval LoadApproval(const std::wstring& path)
         result.payload_sha256 = value["payload_sha256"].get<std::string>();
         result.module_sha256 = value["module_sha256"].get<std::string>();
         result.expires = value["expires_utc"].get<std::time_t>();
+        result.version = value["version"].get<int>();
         if (result.token.size() < 32 || result.token.size() > 128 || result.request_id.size() < 16
             || result.request_id.size() > 64 || result.recipient.empty() || result.recipient.size() > 128
             || !IsHexHash(result.payload_sha256) || !IsHexHash(result.module_sha256)
-            || (result.kind != "text" && result.kind != "image") || result.expires <= std::time(nullptr)
-            || result.expires > std::time(nullptr)+600) return {};
+            || (result.kind != "text" && result.kind != "image") || !ApprovalLifetimeValid(result)) return {};
         for (char c : result.token + result.request_id)
             if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
                 || (c >= '0' && c <= '9') || c == '-' || c == '_')) return {};
@@ -58,7 +59,7 @@ bool ConsumeApproval(const std::wstring& path, const Approval& approval)
     if (!current.enabled || current.token != approval.token || current.request_id != approval.request_id
         || current.recipient != approval.recipient || current.kind != approval.kind
         || current.payload_sha256 != approval.payload_sha256 || current.module_sha256 != approval.module_sha256
-        || current.expires != approval.expires) return false;
+        || current.expires != approval.expires || current.version != approval.version) return false;
     const auto marker = path + L".used-" + std::wstring(approval.request_id.begin(),approval.request_id.end());
     const auto file = CreateFileW(marker.c_str(),GENERIC_WRITE,FILE_SHARE_READ,nullptr,CREATE_NEW,
         FILE_ATTRIBUTE_NORMAL|FILE_FLAG_WRITE_THROUGH,nullptr);

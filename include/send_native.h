@@ -6,12 +6,14 @@ namespace send_fix {
 class WindowsBackend : public Backend {
 public:
     std::unique_ptr<PreparedCall> Prepare(const Request&, const Approval&) override;
+    RetentionUsage Retention() override;
 };
 std::wstring ApprovalPath();
 Approval LoadApproval(const std::wstring& path);
 bool ConsumeApproval(const std::wstring& path, const Approval& approval);
 // 使用卷 GUID 路径，逐层拒绝重解析点并锁住所有父目录及文件。
-// 私有调用可能异步读取路径：进入后保持句柄至进程退出，不能只锁到 Run 返回。
+// 正常发送由原消息及所有已跟踪克隆共同持锁；具体析构完成后回收。
+// 原生故障的未知所有权路径仍保守保留至进程退出，不能只锁到 Run 返回。
 struct LockedImage {
     HANDLE file = INVALID_HANDLE_VALUE;
     std::vector<HANDLE> parents;

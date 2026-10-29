@@ -75,11 +75,41 @@ nlohmann::json Response(const Result& result)
         {"IsSent",nullptr},{"DeliveryConfirmed",false},{"Replayed",result.replayed}};
 }
 
+bool ApprovalLifetimeValid(const Approval& approval)
+{
+    // v2 仅允许群：具体群 ID 仍由每条私有许可绑定，不把用户群 ID 写入源码。
+    if (approval.version == 2) {
+        const auto& recipient = approval.recipient;
+        return approval.expires == 0 && recipient.size() > 9 && recipient.size() <= 128
+            && recipient.compare(recipient.size()-9,9,"@chatroom") == 0
+            && std::all_of(recipient.begin(),recipient.end()-9,[](char c) { return c >= '0' && c <= '9'; });
+    }
+    const auto now = std::time(nullptr);
+    return approval.version == 1 && approval.expires > now && approval.expires <= now + 600;
+}
+
+AuthorizationState Controller::Status()
+{
+    std::unique_lock<std::mutex> lock(mutex_,std::try_to_lock);
+    if (!lock.owns_lock()) return {false,attempted_.load(),true};
+    Approval approval;
+    try { approval = load_(); } catch (...) { return {false,attempted_.load(),false}; }
+    const bool configured = approval.enabled && ApprovalLifetimeValid(approval);
+    const bool consumed = attempted_.load()
+        && (!approval.enabled || approval.request_id == last_approval_.request_id);
+    return {configured,consumed,false};
+}
+
 Result Controller::Dispatch(const std::string& authorization, const std::string& kind, const std::string& body)
 {
-    if (!approval_.enabled || approval_.token.size() < 32 || approval_.token.size() > 128)
+    // 同一把锁覆盖重新读取许可、预检、持久消耗和调用；不在启动时缓存许可。
+    std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+    if (!lock.owns_lock()) return {409,"not_attempted","send_in_progress_no_new_attempt"};
+    Approval approval;
+    try { approval = load_(); } catch (...) { return {}; }
+    if (!approval.enabled || approval.token.size() < 32 || approval.token.size() > 128)
         return {};
-    const std::string expected = "Bearer " + approval_.token;
+    const std::string expected = "Bearer " + approval.token;
     unsigned char difference = authorization.size() == expected.size() ? 0 : 1;
     for (std::size_t i = 0; i < expected.size(); ++i)
         difference |= static_cast<unsigned char>(expected[i])
@@ -88,27 +118,28 @@ Result Controller::Dispatch(const std::string& authorization, const std::string&
     Request request;
     try { request = ParseRequest(kind, body); }
     catch (...) { return {400,"not_attempted","invalid_request"}; }
-    std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
-    if (!lock.owns_lock()) return {409,"not_attempted","send_in_progress_no_new_attempt"};
     const auto fingerprint = Fingerprint(request);
-    if (attempted_) {
-        if (request.id != approval_.request_id || fingerprint != last_fingerprint_)
+    if (attempted_ && approval.request_id == last_approval_.request_id) {
+        if (request.id != approval.request_id || fingerprint != last_fingerprint_)
             return {409,"not_attempted","one_shot_already_used"};
         auto result = last_result_;
         result.replayed = true;
         return result;
     }
-    if (approval_.expires <= std::time(nullptr) || approval_.expires > std::time(nullptr) + 600
-        || request.id != approval_.request_id || request.recipient != approval_.recipient
-        || request.kind != approval_.kind || fingerprint != approval_.payload_sha256
-        || !IsHexHash(approval_.module_sha256)) return {403,"not_attempted","request_not_approved"};
+    if (!ApprovalLifetimeValid(approval)
+        || request.id != approval.request_id || request.recipient != approval.recipient
+        || request.kind != approval.kind || fingerprint != approval.payload_sha256
+        || !IsHexHash(approval.module_sha256)) return {403,"not_attempted","request_not_approved"};
     std::unique_ptr<PreparedCall> prepared;
-    try { prepared = backend_.Prepare(request, approval_); }
+    try { prepared = backend_.Prepare(request, approval); }
     catch (const std::bad_alloc&) { return {503,"not_attempted","allocation_failed"}; }
     catch (const std::exception& error) {
         // 仅返回本代码定义的固定错误码，不泄露路径、正文、凭据或底层异常全文。
         const std::string code(error.what());
-        for (const char* known : {"wechat_module_missing","module_path_failed","wechat_module_hash_mismatch",
+        if (code == "native_retention_budget_exceeded" || code == "native_ownership_fault_requires_investigation"
+            || code == "native_collector_start_failed")
+            return {503,"not_attempted",code};
+        for (const char* known : {"native_ownership_module_not_supported","wechat_module_missing","module_path_failed","wechat_module_hash_mismatch",
             "module_version_failed","wechat_version_not_4_1_10_27","module_header_failed","module_architecture_failed",
             "function_address_not_executable","data_address_not_readable","send_context_unavailable",
             "image_requires_local_absolute_path","image_path_not_stable","image_file_invalid","image_header_invalid",
@@ -119,9 +150,10 @@ Result Controller::Dispatch(const std::string& authorization, const std::string&
     }
     catch (...) { return {422,"not_attempted","native_preflight_failed"}; }
     if (!prepared) return {422,"not_attempted","native_preflight_failed"};
-    try { if (!consume_(approval_)) return {423,"not_attempted","durable_approval_consume_failed"}; }
+    try { if (!consume_(approval)) return {423,"not_attempted","durable_approval_consume_failed"}; }
     catch (...) { return {423,"not_attempted","durable_approval_consume_failed"}; }
     last_fingerprint_ = fingerprint;
+    last_approval_ = approval;
     // 一次性许可已经落盘消耗，任何异常、超时、重启都不得自动重试。
     attempted_ = true;
     last_result_ = {202,"unconfirmed","native_result_not_delivery_receipt",true};

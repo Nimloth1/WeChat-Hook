@@ -8,6 +8,6 @@ inline std::string ApprovalPath(){return "synthetic";}
 inline Approval LoadApproval(const std::string&){return {};}
 inline bool ConsumeApproval(const std::string&,const Approval&){return true;}
 struct Controller {
-    Controller(Approval,WindowsBackend&,std::function<bool(const Approval&)>){}
+    Controller(std::function<Approval()>,WindowsBackend&,std::function<bool(const Approval&)>){}
 };
 }

@@ -81,9 +81,17 @@ public:
     }
     void RetainOnNativeEntry() noexcept { retain_ = true; }
     std::size_t Bytes() const { return bytes_; }
+    // MSVC 原生字符串的大块缓冲带原始分配指针；对象本身不能使用这个布局。
+    void* AllocateString(std::size_t bytes, bool native) {
+        if (!native || bytes < 4096) return Allocate(bytes);
+        auto raw = static_cast<char*>(Allocate(bytes + 39));
+        auto aligned = reinterpret_cast<char*>((reinterpret_cast<std::uintptr_t>(raw) + 39) & ~std::uintptr_t(31));
+        std::memcpy(aligned - 8,&raw,sizeof(raw));
+        return aligned;
+    }
 };
 
-inline NarrowString MakeNarrow(Arena& arena, const std::string& source)
+inline NarrowString MakeNarrow(Arena& arena, const std::string& source, bool native = false)
 {
     NarrowString result{};
     result.length = source.size();
@@ -92,13 +100,13 @@ inline NarrowString MakeNarrow(Arena& arena, const std::string& source)
     else {
         if (source.size() > 32768) throw std::invalid_argument("string_too_large");
         result.capacity = (source.size() | std::size_t(15));
-        result.data.heap = static_cast<char*>(arena.Allocate(result.capacity + 1));
+        result.data.heap = static_cast<char*>(arena.AllocateString(result.capacity + 1,native));
         std::memcpy(result.data.heap, source.data(), source.size());
     }
     return result;
 }
 
-inline WideString MakeWide(Arena& arena, const std::u16string& source)
+inline WideString MakeWide(Arena& arena, const std::u16string& source, bool native = false)
 {
     WideString result{};
     result.length = source.size();
@@ -107,7 +115,7 @@ inline WideString MakeWide(Arena& arena, const std::u16string& source)
     else {
         if (source.size() > 4096) throw std::invalid_argument("path_too_large");
         result.capacity = (source.size() | std::size_t(7));
-        result.data.heap = static_cast<char16_t*>(arena.Allocate((result.capacity + 1) * 2));
+        result.data.heap = static_cast<char16_t*>(arena.AllocateString((result.capacity + 1) * 2,native));
         std::memcpy(result.data.heap, source.data(), source.size() * 2);
     }
     return result;
@@ -131,6 +139,7 @@ struct Frame {
     NarrowString receiver{};
     NarrowString text{};
     bool image = false;
+    void* state = nullptr; // 原生组合状态：24 字节 vector + 232 字节参数。
 };
 
 inline void Put64(void* destination, std::size_t offset, std::uint64_t value)
@@ -138,16 +147,16 @@ inline void Put64(void* destination, std::size_t offset, std::uint64_t value)
 
 inline Frame BuildFrame(Arena& arena, const Addresses& address, const std::string& recipient,
     const std::string& text, const std::u16string* image_path, std::uint64_t file_bytes,
-    const std::string& uuid)
+    const std::string& uuid, bool native = false)
 {
     Frame frame;
     frame.image = image_path != nullptr;
-    frame.receiver = MakeNarrow(arena, recipient);
-    // 原文本对象的分配量是 0x768 个 uint64_t；未获 ABI 证据前不擅自缩小。
-    frame.object = arena.Allocate(frame.image ? 0x7c0 : 0x768 * sizeof(std::uint64_t));
+    frame.receiver = MakeNarrow(arena, recipient,native);
+    // 保留旧分支的回归尺寸；原生工厂已确认控制块总尺寸为 0x758。
+    frame.object = arena.Allocate(frame.image ? 0x7c0 : native ? 0x758 : 0x768 * sizeof(std::uint64_t));
     if (frame.image) {
         Put64(frame.object, 0, address.image_vtable);
-        Put64(frame.object, 8, 0x200000006);
+        Put64(frame.object, 8, native ? 0x100000001 : 0x200000006);
         Put64(frame.object, 16, address.image_vtable2);
         for (auto offset : {0x40,0x60,0x80,0xa0,0x130,0x170,0x1b8,0x668,0x688,
                             0x6b0,0x6f0,0x710,0x738,0x760,0x780,0x7a0}) Put64(frame.object, offset, 15);
@@ -156,26 +165,30 @@ inline Frame BuildFrame(Arena& arena, const Addresses& address, const std::strin
         Put64(frame.object, 0xe8, 3); // 仅 PNG/JPEG/BMP，不猜测 GIF 或普通文件类型。
         Put64(frame.object, 0x150, 7);
         Put64(frame.object, 0x198, file_bytes);
-        auto wide = MakeWide(arena, *image_path);
-        auto guid = MakeNarrow(arena, uuid);
+        auto wide = MakeWide(arena, *image_path,native);
+        auto guid = MakeNarrow(arena, uuid,native);
         std::memcpy(static_cast<char*>(frame.object) + 0xc0, &frame.receiver, 32);
         std::memcpy(static_cast<char*>(frame.object) + 0xf0, &wide, 32);
         std::memcpy(static_cast<char*>(frame.object) + 0x6b8, &guid, 32);
         // 不再用 UTF-8 路径长度覆盖宽字符串的 length/capacity。
     } else {
         Put64(frame.object, 0, address.text_vtable);
-        Put64(frame.object, 8, 0x200000005);
-        frame.text = MakeNarrow(arena, text);
+        Put64(frame.object, 8, native ? 0x100000001 : 0x200000005);
+        frame.text = MakeNarrow(arena, text,native);
     }
-    auto inner = static_cast<std::uint64_t*>(arena.Allocate(0x20 * sizeof(std::uint64_t)));
+    auto inner = static_cast<std::uint64_t*>(arena.Allocate(native ? 16 : 0x20 * sizeof(std::uint64_t)));
     inner[0] = reinterpret_cast<std::uint64_t>(frame.object) + 16;
     inner[1] = reinterpret_cast<std::uint64_t>(frame.object);
-    frame.arg1 = static_cast<std::uint64_t*>(arena.Allocate(0x28 * sizeof(std::uint64_t)));
+    frame.arg1 = static_cast<std::uint64_t*>(arena.Allocate(native ? 40 : 0x28 * sizeof(std::uint64_t)));
     frame.arg1[0] = address.param1_vtable;
     frame.arg1[1] = reinterpret_cast<std::uint64_t>(inner);
     frame.arg1[2] = frame.arg1[3] = reinterpret_cast<std::uint64_t>(inner) + 16;
     frame.arg1[4] = 1;
-    frame.arg2 = static_cast<std::uint64_t*>(arena.Allocate(0xe8 * sizeof(std::uint64_t)));
+    if (native) {
+        frame.state = arena.Allocate(256);
+        std::memcpy(frame.state,frame.arg1+1,24);
+        frame.arg2 = reinterpret_cast<std::uint64_t*>(static_cast<char*>(frame.state)+24);
+    } else frame.arg2 = static_cast<std::uint64_t*>(arena.Allocate(0xe8 * sizeof(std::uint64_t)));
     frame.scratch = arena.Allocate(128); // 两条路径统一采用上游较大的分配，不缩成 16 字节。
     for (unsigned int i = 0; i < 3; ++i) {
         frame.nodes[i] = static_cast<std::uint64_t*>(arena.Allocate(512));
@@ -212,8 +225,8 @@ enum class FrameResult { constructor_fault, constructor_layout_unknown, params_f
 
 inline FrameResult ExecuteFrame(Arena& arena, Frame& frame, const Addresses& address, Invoker& invoke)
 {
-    // 微信异步持有参数的释放契约未公开；禁止在私有函数进入后擅自释放这些参数。
-    // 仅一次许可且本地分配预算 128 KiB，进程退出时回收，不能用作批量发送器。
+    // 历史未配对布局的回归入口；生产 NativePrepared 使用原生布局和独立的配对回收路径。
+    // 此处的替身 RetainsArguments 只描述旧分支，不能用于验证生产回收。
     if (invoke.RetainsArguments()) arena.RetainOnNativeEntry();
     if (!frame.image) {
         if (!invoke.InitText(reinterpret_cast<std::uint64_t>(frame.object) + 16))
