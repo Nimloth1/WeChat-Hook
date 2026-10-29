@@ -22,6 +22,8 @@ void RegisterSendRoutes(httplib::Server& server, Controller& controller)
             {"RetainedParameterBytes",retention.bytes},{"RetainedImageHandles",retention.handles},
             {"RetainedParameterByteLimit",retention.byte_limit},{"RetainedImageHandleLimit",retention.handle_limit},
             {"NativeResourceReclamationVerified",false},
+            {"NativeResourceReclamationImplemented",true},{"NativeOwnershipMode","native_reference_ownership"},
+            {"PendingMessageOwners",retention.pending_owners},{"NativeOwnershipFault",retention.ownership_fault},
             {"DeliveryConfirmed",false},
             {"FileSendSupported",false},{"RuntimeCompatibilityVerified",false}};
         response.set_content(value.dump(),"application/json");

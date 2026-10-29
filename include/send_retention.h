@@ -7,6 +7,8 @@
 namespace send_fix {
 struct RetentionUsage {
     std::size_t bytes = 0, handles = 0, byte_limit = 0, handle_limit = 0;
+    std::size_t pending_owners = 0;
+    bool ownership_fault = false;
 };
 
 // 只约束本模块显式保留的参数分配和句柄，不是微信 RSS 或私有函数分配的上限。
