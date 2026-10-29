@@ -1,0 +1,131 @@
+{
+  "scope": "CPU-emulated native parameter construction, task copy and disposal; not production reclamation",
+  "native_sha256": "f487e4f56930456a25fb0d7b058c77e2dcd364e268d49bdfff4dc0e3be26ba36",
+  "tool_dependency": "unicorn==2.1.4",
+  "full_run": {
+    "checks": 2024,
+    "cycles": 1000,
+    "cycle_remaining_allocations": 0,
+    "cycle_peak_parameter_bytes": 9583,
+    "cycle_total_allocations": 17500,
+    "cases": [
+      {
+        "kind": "text",
+        "initial_count": "0x100000001",
+        "remaining_allocations": 0,
+        "remaining_bytes": 0,
+        "peak_bytes": 9583
+      },
+      {
+        "kind": "text",
+        "initial_count": "0x200000005",
+        "remaining_allocations": 4,
+        "remaining_bytes": 7007,
+        "peak_bytes": 9583
+      },
+      {
+        "kind": "image",
+        "initial_count": "0x100000001",
+        "remaining_allocations": 0,
+        "remaining_bytes": 0,
+        "peak_bytes": 4688
+      },
+      {
+        "kind": "image",
+        "initial_count": "0x200000006",
+        "remaining_allocations": 4,
+        "remaining_bytes": 2112,
+        "peak_bytes": 4688
+      }
+    ],
+    "image_original_can_die_before_clone": true,
+    "image_path_copy_is_independent": true,
+    "stubbed_functions": [
+      "native_allocator",
+      "native_free",
+      "memcpy",
+      "uuid_generator",
+      "session_provider",
+      "outer_queue"
+    ],
+    "executes_actual_native_instruction_bytes": true,
+    "queued_task_body_executed": false,
+    "queue_disposal_only": true,
+    "private_function_exceptions_verified": false,
+    "callback_captures_are_empty": true,
+    "loads_native_module": false,
+    "real_image_io": false,
+    "production_reclamation_changed": false,
+    "handle_reclamation_verified": false,
+    "real_wechat_access": false,
+    "native_sha256": "f487e4f56930456a25fb0d7b058c77e2dcd364e268d49bdfff4dc0e3be26ba36",
+    "elapsed_seconds": 99.407
+  },
+  "full_run_process_sampled_peak_bytes": 350445568,
+  "full_run_note": "Before final same-length synthetic-recipient literal replacement; all other test logic identical. No actual recipient lookup, I/O or sending.",
+  "final_source_sha256": "c5626ce9f9b9c28a9c35a9e76cd92b3e7ecc7dd9ec117638e639c0d43eab04b4",
+  "final_source_recheck": {
+    "checks": 224,
+    "cycles": 100,
+    "cycle_remaining_allocations": 0,
+    "cycle_peak_parameter_bytes": 9583,
+    "cycle_total_allocations": 1750,
+    "cases": [
+      {
+        "kind": "text",
+        "initial_count": "0x100000001",
+        "remaining_allocations": 0,
+        "remaining_bytes": 0,
+        "peak_bytes": 9583
+      },
+      {
+        "kind": "text",
+        "initial_count": "0x200000005",
+        "remaining_allocations": 4,
+        "remaining_bytes": 7007,
+        "peak_bytes": 9583
+      },
+      {
+        "kind": "image",
+        "initial_count": "0x100000001",
+        "remaining_allocations": 0,
+        "remaining_bytes": 0,
+        "peak_bytes": 4688
+      },
+      {
+        "kind": "image",
+        "initial_count": "0x200000006",
+        "remaining_allocations": 4,
+        "remaining_bytes": 2112,
+        "peak_bytes": 4688
+      }
+    ],
+    "image_original_can_die_before_clone": true,
+    "image_path_copy_is_independent": true,
+    "stubbed_functions": [
+      "native_allocator",
+      "native_free",
+      "memcpy",
+      "uuid_generator",
+      "session_provider",
+      "outer_queue"
+    ],
+    "executes_actual_native_instruction_bytes": true,
+    "queued_task_body_executed": false,
+    "queue_disposal_only": true,
+    "private_function_exceptions_verified": false,
+    "callback_captures_are_empty": true,
+    "loads_native_module": false,
+    "real_image_io": false,
+    "production_reclamation_changed": false,
+    "handle_reclamation_verified": false,
+    "real_wechat_access": false,
+    "native_sha256": "f487e4f56930456a25fb0d7b058c77e2dcd364e268d49bdfff4dc0e3be26ba36",
+    "elapsed_seconds": 11.093
+  },
+  "final_source_recheck_process_sampled_peak_bytes": 75059200,
+  "runs_production_NativePrepared": false,
+  "native_queue_business_body_executed": false,
+  "production_reclamation_implemented": false,
+  "long_running_goal_complete": false
+}
