@@ -12,6 +12,7 @@ namespace send_fix {
 struct Request {
     std::string kind, id, recipient, value, image_sha256;
     std::u16string unicode;
+    std::string file_sha256;
 };
 struct Result {
     int http = 423;

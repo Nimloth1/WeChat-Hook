@@ -20,12 +20,13 @@ void RegisterSendRoutes(httplib::Server& server, Controller& controller)
             {"SendAttemptConsumed",state.consumed},{"SendInProgress",state.busy},
             {"ApprovalReload","per_request"},{"ApprovalVersion2GroupOnly",true},
             {"RetainedParameterBytes",retention.bytes},{"RetainedImageHandles",retention.handles},
+            {"RetainedPayloadHandles",retention.handles},
             {"RetainedParameterByteLimit",retention.byte_limit},{"RetainedImageHandleLimit",retention.handle_limit},
             {"NativeResourceReclamationVerified",false},
             {"NativeResourceReclamationImplemented",true},{"NativeOwnershipMode","native_reference_ownership"},
             {"PendingMessageOwners",retention.pending_owners},{"NativeOwnershipFault",retention.ownership_fault},
             {"DeliveryConfirmed",false},
-            {"FileSendSupported",false},{"RuntimeCompatibilityVerified",false}};
+            {"FileSendSupported",true},{"FileSendRuntimeVerified",false},{"FileByteLimit",100ULL*1024*1024},{"RuntimeCompatibilityVerified",false}};
         response.set_content(value.dump(),"application/json");
     });
     const auto route = [&](const char* path,const std::string& kind) {
@@ -42,9 +43,6 @@ void RegisterSendRoutes(httplib::Server& server, Controller& controller)
     };
     route("/SendTextMsg","text");
     route("/SendImgMsg","image");
-    server.Post("/send_file_msg",[](const httplib::Request&,httplib::Response& response) {
-        response.status = 501;
-        response.set_content(R"({"state":"not_attempted","IsSent":null,"error":"file_send_source_not_available"})","application/json");
-    });
+    route("/send_file_msg","file");
 }
 } // namespace send_fix

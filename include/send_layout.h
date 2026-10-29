@@ -128,6 +128,7 @@ struct Addresses {
     std::uint64_t param1_vtable = 0;
     std::uint64_t param2_vtables[3]{};
     std::uint64_t context = 0; // Opaque argument-six value, not a pointer to dereference.
+    std::uint64_t file_vtable = 0, file_vtable2 = 0;
 };
 
 struct Frame {
@@ -138,7 +139,9 @@ struct Frame {
     void* scratch = nullptr;
     NarrowString receiver{};
     NarrowString text{};
-    bool image = false;
+    bool image = false, file = false;
+    WideString file_path{};
+    NarrowString filename{}, extension{};
     void* state = nullptr; // 原生组合状态：24 字节 vector + 232 字节参数。
 };
 
@@ -147,14 +150,24 @@ inline void Put64(void* destination, std::size_t offset, std::uint64_t value)
 
 inline Frame BuildFrame(Arena& arena, const Addresses& address, const std::string& recipient,
     const std::string& text, const std::u16string* image_path, std::uint64_t file_bytes,
-    const std::string& uuid, bool native = false)
+    const std::string& uuid, bool native = false, bool file = false, const std::string& filename = "")
 {
     Frame frame;
     frame.image = image_path != nullptr;
+    frame.file = file;
+    if (file && (!native || !image_path)) throw std::invalid_argument("file_requires_native_layout");
     frame.receiver = MakeNarrow(arena, recipient,native);
     // 保留旧分支的回归尺寸；原生工厂已确认控制块总尺寸为 0x758。
-    frame.object = arena.Allocate(frame.image ? 0x7c0 : native ? 0x758 : 0x768 * sizeof(std::uint64_t));
-    if (frame.image) {
+    frame.object = arena.Allocate(file ? 0x718 : frame.image ? 0x7c0 : native ? 0x758 : 0x768 * sizeof(std::uint64_t));
+    if (file) {
+        Put64(frame.object,0,address.file_vtable);
+        Put64(frame.object,8,0x100000001);
+        frame.text = MakeNarrow(arena,uuid,true); // 构造完成后把这份 UUID 所有权移入对象。
+        frame.file_path = MakeWide(arena,*image_path,true);
+        frame.filename = MakeNarrow(arena,filename,true);
+        const auto dot = filename.find_last_of('.');
+        frame.extension = MakeNarrow(arena,dot == std::string::npos ? "" : filename.substr(dot+1),true);
+    } else if (frame.image) {
         Put64(frame.object, 0, address.image_vtable);
         Put64(frame.object, 8, native ? 0x100000001 : 0x200000006);
         Put64(frame.object, 16, address.image_vtable2);
@@ -211,6 +224,35 @@ inline void FinishTextFrame(Frame& frame)
     std::memcpy(object + 0x708, &frame.text, 32);
     Put64(object, 0xd8, 1);
     Put64(object, 0x188, frame.text.length);
+}
+
+// 4.1.10.27 附件使用基类对象（0x708）+控制块头（0x10），不是图片派生类。
+inline void FinishFileFrame(Frame& frame, std::uint64_t file_bytes)
+{
+    auto object = static_cast<char*>(frame.object)+16;
+    for (auto offset : {0xb0,0x108,0x168,0x6a8}) {
+        NarrowString current{}; std::memcpy(&current,object+offset,32);
+        if (current.length || current.capacity > 15) throw std::runtime_error("unexpected_file_constructor_layout");
+    }
+    WideString path{}; std::memcpy(&path,object+0xe0,32);
+    if (path.length || path.capacity > 7) throw std::runtime_error("unexpected_file_constructor_layout");
+    std::uint64_t self_object=0,self_control=0;
+    std::memcpy(&self_object,object+8,8);std::memcpy(&self_control,object+16,8);
+    if (self_object || self_control) throw std::runtime_error("unexpected_file_constructor_layout");
+    // 与原生0x22a92b0工厂一致，建立 enable_shared_from_this 的一份弱引用。
+    // 对象尚未发布，无并发引用者；克隆工厂会为每个副本自行建立这份弱引用。
+    Put64(frame.object,8,0x200000001);
+    Put64(object,8,reinterpret_cast<std::uint64_t>(object));
+    Put64(object,16,reinterpret_cast<std::uint64_t>(frame.object));
+    std::memcpy(object+0xb0,&frame.receiver,32);
+    std::memcpy(object+0xe0,&frame.file_path,32);
+    std::memcpy(object+0x108,&frame.extension,32);
+    std::memcpy(object+0x168,&frame.filename,32);
+    std::memcpy(object+0x6a8,&frame.text,32);
+    Put64(object,0xd0,0x100000001);
+    Put64(object,0xd8,0x600000031); // 消息类型49，附件子类型6。
+    Put64(object,0x100,1);
+    Put64(object,0x188,file_bytes);
 }
 
 struct Invoker {

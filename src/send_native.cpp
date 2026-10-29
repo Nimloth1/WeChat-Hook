@@ -120,11 +120,13 @@ std::uint64_t Module(const Approval& approval,HMODULE module)
     if (nt->Signature != IMAGE_NT_SIGNATURE || nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64)
         throw std::runtime_error("module_architecture_failed");
     for (auto relative : {offset::create_param2,static_cast<std::uint64_t>(offset::txt_message_ctr),offset::send_message,
-        std::uint64_t(0x680d0fc),std::uint64_t(0x680d138),std::uint64_t(0x1678000)})
+        std::uint64_t(0x680d0fc),std::uint64_t(0x680d138),std::uint64_t(0x1678000),
+        std::uint64_t(0x6b2d30)})
         if (relative >= nt->OptionalHeader.SizeOfImage || !MemoryRange(base+relative,16,true))
             throw std::runtime_error("function_address_not_executable");
     for (auto relative : {offset::param1_vtable,offset::param2,offset::param2_1,offset::param2_2,offset::param2_3,
-                          static_cast<std::uint64_t>(offset::txt_message_vtbl),offset::img_msg_vtbl,offset::img_msg_vtb2})
+                          static_cast<std::uint64_t>(offset::txt_message_vtbl),offset::img_msg_vtbl,offset::img_msg_vtb2,
+                          std::uint64_t(0x84f9a78),std::uint64_t(0x8279578)})
         if (relative >= nt->OptionalHeader.SizeOfImage || !MemoryRange(base+relative,8,false))
             throw std::runtime_error("data_address_not_readable");
     return base;
@@ -197,7 +199,8 @@ void CheckImagePathHandle(HANDLE file, const std::wstring& expected, bool direct
 }
 }
 
-LockedImage OpenImage(const Request& request)
+namespace {
+LockedImage OpenPayload(const Request& request, bool attachment)
 {
     const auto& path = request.unicode;
     if (path.size() < 4 || !((path[0] >= u'A' && path[0] <= u'Z') || (path[0] >= u'a' && path[0] <= u'z'))
@@ -242,8 +245,14 @@ LockedImage OpenImage(const Request& request)
         FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
     CheckImagePathHandle(image.file,stable,false);
     LARGE_INTEGER length{};
-    if (!GetFileSizeEx(image.file,&length) || length.QuadPart <= 0 || length.QuadPart > 20*1024*1024)
+    if (!GetFileSizeEx(image.file,&length) || length.QuadPart <= 0 || length.QuadPart > (attachment ? 100LL : 20LL)*1024*1024)
         throw std::runtime_error("image_file_invalid");
+    if (attachment) {
+        if (HashOpenFile(image.file,100ULL*1024*1024) != request.file_sha256)
+            throw std::runtime_error("attachment_hash_mismatch");
+        image.size = static_cast<std::uint64_t>(length.QuadPart);
+        return image;
+    }
     unsigned char head[8]{}; DWORD read = 0;
     if (!ReadFile(image.file,head,8,&read,nullptr) || read < 3) throw std::runtime_error("image_header_invalid");
     const unsigned char png[8] = {137,80,78,71,13,10,26,10};
@@ -254,6 +263,21 @@ LockedImage OpenImage(const Request& request)
     return image;
 }
 
+} // namespace
+
+LockedImage OpenImage(const Request& request) { return OpenPayload(request,false); }
+LockedImage OpenFile(const Request& request)
+{
+    const auto name = request.unicode.substr(request.unicode.find_last_of(u'\\')+1);
+    if (name.empty() || name.size() > 255) throw std::runtime_error("attachment_name_invalid");
+    try { return OpenPayload(request,true); }
+    catch (const std::runtime_error& error) {
+        const std::string code(error.what());
+        if (code.compare(0,6,"image_")==0) throw std::runtime_error("attachment_"+code.substr(6));
+        throw;
+    }
+}
+
 std::unique_ptr<PreparedCall> WindowsBackend::Prepare(const Request& request, const Approval& approval)
 {
     // 哈希校验到最后一份观察记录结束之间，保护晚到的原生析构/释放代码。
@@ -261,12 +285,12 @@ std::unique_ptr<PreparedCall> WindowsBackend::Prepare(const Request& request, co
     if (!GetModuleHandleExW(0,L"Weixin.dll",&module->value)) throw std::runtime_error("wechat_module_missing");
     const auto base = Module(approval,module->value);
     Addresses address{base+offset::txt_message_vtbl,base+offset::img_msg_vtbl,base+offset::img_msg_vtb2,
-        base+offset::param1_vtable,{base+offset::param2_1,base+offset::param2_2,base+offset::param2_3},0};
+        base+offset::param1_vtable,{base+offset::param2_1,base+offset::param2_2,base+offset::param2_3},0,base+0x84f9a78,base+0x8279578};
     address.context = ReadSendContextValue(base+offset::param2,
         [](std::uint64_t slot,void* value,std::size_t size,std::size_t& read) {
             return ReadProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(slot),value,size,&read) != FALSE;
         });
-    auto image = request.kind == "image" ? OpenImage(request) : LockedImage{};
+    auto image = request.kind == "image" ? OpenImage(request) : request.kind == "file" ? OpenFile(request) : LockedImage{};
     return std::make_unique<NativePrepared>(request,base,address,std::move(image),NativeRetentionBudget(),std::move(module));
 }
 } // namespace send_fix
