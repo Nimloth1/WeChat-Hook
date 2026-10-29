@@ -23,7 +23,9 @@ struct Approval {
     bool enabled = false;
     std::string token, request_id, recipient, kind, payload_sha256, module_sha256;
     std::time_t expires = 0;
+    int version = 1;
 };
+bool ApprovalLifetimeValid(const Approval& approval);
 bool IsHexHash(const std::string& value);
 std::string Sha256(const void* data, std::size_t size);
 std::string Fingerprint(const Request& request);
@@ -39,8 +41,13 @@ struct Backend {
     virtual std::unique_ptr<PreparedCall> Prepare(const Request& request, const Approval& approval) = 0;
 };
 
+struct AuthorizationState {
+    bool configured = false, consumed = false, busy = false;
+};
+
 class Controller {
-    Approval approval_;
+    std::function<Approval()> load_;
+    Approval last_approval_;
     Backend& backend_;
     std::function<bool(const Approval&)> consume_;
     std::mutex mutex_;
@@ -49,9 +56,12 @@ class Controller {
     Result last_result_;
 public:
     Controller(Approval approval, Backend& backend, std::function<bool(const Approval&)> consume)
-        : approval_(std::move(approval)), backend_(backend), consume_(std::move(consume)) {}
+        : Controller([approval=std::move(approval)] { return approval; },backend,std::move(consume)) {}
+    Controller(std::function<Approval()> load, Backend& backend, std::function<bool(const Approval&)> consume)
+        : load_(std::move(load)), backend_(backend), consume_(std::move(consume)) {}
     Result Dispatch(const std::string& authorization, const std::string& kind, const std::string& body);
-    bool Attempted() const { return attempted_.load(); }
-    bool Configured() const { return approval_.enabled; }
+    AuthorizationState Status();
+    bool Attempted() { return Status().consumed; }
+    bool Configured() { return Status().configured; }
 };
 } // namespace send_fix

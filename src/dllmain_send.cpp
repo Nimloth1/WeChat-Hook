@@ -32,7 +32,7 @@ DWORD WINAPI RunSendServer(void*)
         // 许可由用户批准后另行准备；缺省不创建目录、许可或消耗标记。
         const auto path = send_fix::ApprovalPath();
         auto backend = std::make_unique<send_fix::WindowsBackend>();
-        auto controller = std::make_unique<send_fix::Controller>(send_fix::LoadApproval(path),*backend,
+        auto controller = std::make_unique<send_fix::Controller>([path] { return send_fix::LoadApproval(path); },*backend,
             [path](const send_fix::Approval& approval) { return send_fix::ConsumeApproval(path,approval); });
         Worker(send_fix::WorkerStage::approval_read);
         auto server = std::make_unique<httplib::Server>();

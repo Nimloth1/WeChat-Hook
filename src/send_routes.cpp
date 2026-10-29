@@ -13,9 +13,12 @@ void RegisterSendRoutes(httplib::Server& server, Controller& controller)
     server.set_read_timeout(3,0);
     server.set_write_timeout(3,0);
     server.Get("/QueryDB/status",[&](const httplib::Request&,httplib::Response& response) {
+        const auto state = controller.Status();
         const nlohmann::json value{{"Build","vw12-send-fix-v1"},{"IsLogin",nullptr},
-            {"LoginStateKnown",false},{"SendApprovalConfigured",controller.Configured()},
-            {"SendAttemptConsumed",controller.Attempted()},{"DeliveryConfirmed",false},
+            {"LoginStateKnown",false},{"SendApprovalConfigured",state.configured},
+            {"SendAttemptConsumed",state.consumed},{"SendInProgress",state.busy},
+            {"ApprovalReload","per_request"},{"ApprovalVersion2GroupOnly",true},
+            {"DeliveryConfirmed",false},
             {"FileSendSupported",false},{"RuntimeCompatibilityVerified",false}};
         response.set_content(value.dump(),"application/json");
     });
