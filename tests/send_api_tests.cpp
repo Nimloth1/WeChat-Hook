@@ -266,6 +266,8 @@ int main()
             const auto before = client.Get("/QueryDB/status");
             bool passed = before && before->status == 200
                 && json::parse(before->body)["ApprovalReload"] == "per_request"
+                && json::parse(before->body)["NativeResourceReclamationVerified"] == false
+                && json::parse(before->body)["RetainedParameterBytes"] == 0
                 && json::parse(before->body)["SendApprovalConfigured"] == false;
             for (int i=0;i<2;++i) {
                 const auto body = GroupBody("offline-http-hot-000"+std::to_string(i),u8"合成中文消息"+std::to_string(i));

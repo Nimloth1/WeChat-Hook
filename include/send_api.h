@@ -1,6 +1,7 @@
 #pragma once
 #include "json.hpp"
 #include "send_layout.h"
+#include "send_retention.h"
 #include <atomic>
 #include <ctime>
 #include <functional>
@@ -39,6 +40,7 @@ struct PreparedCall {
 struct Backend {
     virtual ~Backend() = default;
     virtual std::unique_ptr<PreparedCall> Prepare(const Request& request, const Approval& approval) = 0;
+    virtual RetentionUsage Retention() { return {}; }
 };
 
 struct AuthorizationState {
@@ -63,5 +65,6 @@ public:
     AuthorizationState Status();
     bool Attempted() { return Status().consumed; }
     bool Configured() { return Status().configured; }
+    RetentionUsage Retention() { return backend_.Retention(); }
 };
 } // namespace send_fix

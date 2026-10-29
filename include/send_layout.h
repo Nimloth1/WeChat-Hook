@@ -213,7 +213,7 @@ enum class FrameResult { constructor_fault, constructor_layout_unknown, params_f
 inline FrameResult ExecuteFrame(Arena& arena, Frame& frame, const Addresses& address, Invoker& invoke)
 {
     // 微信异步持有参数的释放契约未公开；禁止在私有函数进入后擅自释放这些参数。
-    // 仅一次许可且本地分配预算 128 KiB，进程退出时回收，不能用作批量发送器。
+    // 每帧最多 128 KiB；生产 NativePrepared 另行预留进程累计预算，不能据此声称安全回收。
     if (invoke.RetainsArguments()) arena.RetainOnNativeEntry();
     if (!frame.image) {
         if (!invoke.InitText(reinterpret_cast<std::uint64_t>(frame.object) + 16))

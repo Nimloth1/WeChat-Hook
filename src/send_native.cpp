@@ -27,6 +27,13 @@ struct WinHeap : Heap {
 };
 WinHeap process_heap;
 
+RetentionBudget& NativeRetentionBudget()
+{
+    // 进程共用，不能通过更换许可、controller 或 backend 重置。
+    static RetentionBudget budget(16 * 1024 * 1024,256);
+    return budget;
+}
+
 // SEH 仅隔离私有调用异常，不能证明被调用函数没有破坏进程或已发送消息。
 bool CallInit(std::uint64_t function, std::uint64_t object)
 {
@@ -120,15 +127,23 @@ std::uint64_t Module(const Approval& approval)
 
 struct NativePrepared : PreparedCall {
     LockedImage image_file;
-    Arena arena{process_heap};
+    Arena arena;
     Addresses address;
-    NativeInvoker invoke;
+    NativeInvoker native_invoke;
+    Invoker& invoke;
     Frame frame;
-    NativePrepared(const Request& request, std::uint64_t base, const Addresses& a, LockedImage&& image)
-        : image_file(std::move(image)), address(a), invoke(base), frame(BuildFrame(arena,address,request.recipient,
+    RetentionBudget::Reservation reservation;
+    NativePrepared(const Request& request, std::uint64_t base, const Addresses& a, LockedImage&& image,
+        Heap& heap = process_heap, RetentionBudget& budget = NativeRetentionBudget(), Invoker* invoker = nullptr)
+        : image_file(std::move(image)), arena(heap), address(a), native_invoke(base),
+          invoke(invoker ? *invoker : native_invoke), frame(BuildFrame(arena,address,request.recipient,
             request.kind == "text" ? request.value : "", request.kind == "image" ? &image_file.path : nullptr,
-            image_file.size, request.kind == "image" ? Guid() : "")) {}
+            image_file.size, request.kind == "image" ? Guid() : "")),
+          reservation(budget.Reserve(arena.Bytes(),image_file.parents.size()
+              + (image_file.file != INVALID_HANDLE_VALUE ? 1 : 0))) {}
     Result Run() override {
+        reservation.RetainOnNativeEntry();
+        arena.RetainOnNativeEntry();
         image_file.RetainOnNativeEntry();
         const auto result = ExecuteFrame(arena,frame,address,invoke);
         const char* error = result == FrameResult::unconfirmed ? "native_result_not_delivery_receipt"
@@ -139,6 +154,8 @@ struct NativePrepared : PreparedCall {
     }
 };
 } // namespace
+
+RetentionUsage WindowsBackend::Retention() { return NativeRetentionBudget().Usage(); }
 
 std::string HashOpenFile(HANDLE file, std::uint64_t maximum)
 {

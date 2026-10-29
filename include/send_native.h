@@ -6,6 +6,7 @@ namespace send_fix {
 class WindowsBackend : public Backend {
 public:
     std::unique_ptr<PreparedCall> Prepare(const Request&, const Approval&) override;
+    RetentionUsage Retention() override;
 };
 std::wstring ApprovalPath();
 Approval LoadApproval(const std::wstring& path);

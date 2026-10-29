@@ -136,6 +136,8 @@ Result Controller::Dispatch(const std::string& authorization, const std::string&
     catch (const std::exception& error) {
         // 仅返回本代码定义的固定错误码，不泄露路径、正文、凭据或底层异常全文。
         const std::string code(error.what());
+        if (code == "native_retention_budget_exceeded")
+            return {503,"not_attempted",code};
         for (const char* known : {"wechat_module_missing","module_path_failed","wechat_module_hash_mismatch",
             "module_version_failed","wechat_version_not_4_1_10_27","module_header_failed","module_architecture_failed",
             "function_address_not_executable","data_address_not_readable","send_context_unavailable",

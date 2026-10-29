@@ -14,10 +14,14 @@ void RegisterSendRoutes(httplib::Server& server, Controller& controller)
     server.set_write_timeout(3,0);
     server.Get("/QueryDB/status",[&](const httplib::Request&,httplib::Response& response) {
         const auto state = controller.Status();
+        const auto retention = controller.Retention();
         const nlohmann::json value{{"Build","vw12-send-fix-v1"},{"IsLogin",nullptr},
             {"LoginStateKnown",false},{"SendApprovalConfigured",state.configured},
             {"SendAttemptConsumed",state.consumed},{"SendInProgress",state.busy},
             {"ApprovalReload","per_request"},{"ApprovalVersion2GroupOnly",true},
+            {"RetainedParameterBytes",retention.bytes},{"RetainedImageHandles",retention.handles},
+            {"RetainedParameterByteLimit",retention.byte_limit},{"RetainedImageHandleLimit",retention.handle_limit},
+            {"NativeResourceReclamationVerified",false},
             {"DeliveryConfirmed",false},
             {"FileSendSupported",false},{"RuntimeCompatibilityVerified",false}};
         response.set_content(value.dump(),"application/json");
