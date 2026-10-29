@@ -200,7 +200,7 @@ struct NativePrepared : PreparedCall {
     NativePrepared(const Request& value,std::uint64_t module,const Addresses& addresses,LockedImage&& image,
         RetentionBudget& budget=NativeRetentionBudget(),std::shared_ptr<NativeModuleReference> reference={})
         : request(value),base(module),address(addresses),lease(std::make_shared<RequestLease>(std::move(image),budget,std::move(reference))),
-          uuid(value.kind == "image" ? Guid() : "") {
+          uuid(value.kind != "text" ? Guid() : "") {
         if (NativeOwnership().Poisoned()) throw std::runtime_error("native_ownership_fault_requires_investigation");
     }
     Result Run() override {
@@ -211,12 +211,14 @@ struct NativePrepared : PreparedCall {
         // 到这里 Controller 已持久消耗许可；Prepare 不分配原生对象、不调用私有函数。
         std::unique_ptr<OwnershipRecord> record(new OwnershipRecord);
         record->lease=lease;
-        record->expected_control=request.kind == "image" ? address.image_vtable : address.text_vtable;
-        record->expected_image=address.image_vtable2;
+        record->expected_control=request.kind == "file" ? address.file_vtable :
+            request.kind == "image" ? address.image_vtable : address.text_vtable;
+        record->expected_image=request.kind == "file" ? address.file_vtable2 : address.image_vtable2;
         Frame frame;
         try {
             frame=BuildFrame(arena,address,request.recipient,request.kind == "text" ? request.value : "",
-                request.kind == "image" ? &lease->image.path : nullptr,lease->image.size,uuid,true);
+                request.kind != "text" ? &lease->image.path : nullptr,lease->image.size,uuid,true,
+                request.kind == "file",request.value.substr(request.value.find_last_of('\\')+1));
         } catch (...) {
             if (NativeOwnership().Poisoned()) arena.RetainOnNativeEntry();
             return {202,"unconfirmed","native_frame_allocation_failed_no_retry",true};
@@ -226,7 +228,14 @@ struct NativePrepared : PreparedCall {
             NativeOwnership().Poison(lease);
             return Result{202,"unconfirmed",error,true};
         };
-        if (!frame.image) {
+        if (frame.file) {
+            NarrowString empty_uuid{}; empty_uuid.capacity=15;
+            // 复用两参数 SEH 调用桥，此处仅执行构造器，并非发送。
+            if (!CallSubmit(base+0x6b2d30,reinterpret_cast<std::uint64_t>(frame.object)+16,
+                reinterpret_cast<std::uint64_t>(&empty_uuid))) return fault("file_constructor_fault_no_retry");
+            try { FinishFileFrame(frame,lease->image.size); }
+            catch (...) { return fault("file_constructor_layout_unknown_no_retry"); }
+        } else if (!frame.image) {
             if (!CallInit(base+offset::txt_message_ctr,reinterpret_cast<std::uint64_t>(frame.object)+16))
                 return fault("text_constructor_fault_no_retry");
             try { FinishTextFrame(frame); }

@@ -1,0 +1,283 @@
+{
+  "recorded_at_utc": "2026-10-29T14:04:06.535133+00:00",
+  "state": "offline_candidate_not_deployed_not_sent",
+  "normal_native_fixture": {
+    "checks": 26743,
+    "cycles": 10000,
+    "allocations": 187589,
+    "frees": 187589,
+    "peak_native_parameter_bytes": 359680,
+    "handle_delta": 0
+  },
+  "fault_modes": [
+    {
+      "mode": "ctor-fault",
+      "checks": 8
+    },
+    {
+      "mode": "params-fault",
+      "checks": 9
+    },
+    {
+      "mode": "submit-fault",
+      "checks": 9
+    },
+    {
+      "mode": "cleanup-fault",
+      "checks": 9
+    },
+    {
+      "mode": "destroy-fault",
+      "checks": 9
+    },
+    {
+      "mode": "clone-fault",
+      "checks": 10
+    },
+    {
+      "mode": "metadata-fault",
+      "checks": 14
+    },
+    {
+      "mode": "file-ctor-fault",
+      "checks": 9
+    },
+    {
+      "mode": "file-params-fault",
+      "checks": 9
+    },
+    {
+      "mode": "file-submit-fault",
+      "checks": 9
+    },
+    {
+      "mode": "file-cleanup-fault",
+      "checks": 9
+    },
+    {
+      "mode": "file-destroy-fault",
+      "checks": 9
+    },
+    {
+      "mode": "file-clone-fault",
+      "checks": 10
+    },
+    {
+      "mode": "file-metadata-fault",
+      "checks": 14
+    }
+  ],
+  "native_fixture_assertions": 26880,
+  "process_samples": [
+    {
+      "Name": "ownership-build",
+      "ExitCode": 0,
+      "Seconds": 12.0297308,
+      "SampledPeakBytes": 215252992
+    },
+    {
+      "Name": "ownership-normal",
+      "ExitCode": 0,
+      "Seconds": 3.4561845,
+      "SampledPeakBytes": 7204864
+    },
+    {
+      "Name": "ownership-ctor-fault",
+      "ExitCode": 0,
+      "Seconds": 0.21680629999999998,
+      "SampledPeakBytes": 5853184
+    },
+    {
+      "Name": "ownership-params-fault",
+      "ExitCode": 0,
+      "Seconds": 0.218476,
+      "SampledPeakBytes": 5849088
+    },
+    {
+      "Name": "ownership-submit-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2223953,
+      "SampledPeakBytes": 5853184
+    },
+    {
+      "Name": "ownership-cleanup-fault",
+      "ExitCode": 0,
+      "Seconds": 0.22220859999999998,
+      "SampledPeakBytes": 5861376
+    },
+    {
+      "Name": "ownership-destroy-fault",
+      "ExitCode": 0,
+      "Seconds": 0.22157939999999998,
+      "SampledPeakBytes": 5849088
+    },
+    {
+      "Name": "ownership-clone-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2429143,
+      "SampledPeakBytes": 5836800
+    },
+    {
+      "Name": "ownership-metadata-fault",
+      "ExitCode": 0,
+      "Seconds": 0.22990139999999998,
+      "SampledPeakBytes": 5849088
+    },
+    {
+      "Name": "ownership-file-ctor-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2195661,
+      "SampledPeakBytes": 5861376
+    },
+    {
+      "Name": "ownership-file-params-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2572761,
+      "SampledPeakBytes": 5857280
+    },
+    {
+      "Name": "ownership-file-submit-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2510081,
+      "SampledPeakBytes": 5840896
+    },
+    {
+      "Name": "ownership-file-cleanup-fault",
+      "ExitCode": 0,
+      "Seconds": 0.22151569999999998,
+      "SampledPeakBytes": 5844992
+    },
+    {
+      "Name": "ownership-file-destroy-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2231076,
+      "SampledPeakBytes": 5853184
+    },
+    {
+      "Name": "ownership-file-clone-fault",
+      "ExitCode": 0,
+      "Seconds": 0.21242919999999998,
+      "SampledPeakBytes": 5849088
+    },
+    {
+      "Name": "ownership-file-metadata-fault",
+      "ExitCode": 0,
+      "Seconds": 0.213054,
+      "SampledPeakBytes": 5853184
+    }
+  ],
+  "full_build": {
+    "ExitCode": 0,
+    "ElapsedSeconds": 88.5,
+    "SampledPeakTreeBytes": 225701888,
+    "Bytes": 428544,
+    "SHA256": "7058B765CDAE9A1B3DB2CBF3BEFDB2992DDD5682F2F51CB365B11096C70FCBA9",
+    "NoWeChatGuestAccess": true,
+    "SendingPermissionCreated": false
+  },
+  "full_regression_pass_lines": [
+    "PASS send_layout checks=263; no WeChat module or process used",
+    "PASS 84 context checks; text/image preserve opaque bits; failed/short reads rejected; no private calls",
+    "PASS retention_budget checks=18",
+    "PASS native_preflight checks=2033; actual NativePrepared; no private calls",
+    "PASS send_api checks=132; fake backend only; no WeChat private function called",
+    "PASS send_image checks=29; parent junction rejected, stable path and lifetime locks; no WeChat calls",
+    "PASS send_file checks=26; exact hash, arbitrary bytes, ancestors locked, no native calls",
+    "PASS: candidate loaded outside WeChat; 17 exports and 128 concurrent system version queries work",
+    "PASS synthetic Weixin.exe: immediate FreeLibrary, main=1, mapped=1, no approval/module/private call",
+    "PASS synthetic Weixin.exe: immediate FreeLibrary, main=1, mapped=1, no approval/module/private call",
+    "PASS synthetic Weixin.exe: immediate FreeLibrary, main=0, mapped=0, no approval/module/private call",
+    "PASS synthetic Weixin.exe: immediate FreeLibrary, main=0, mapped=0, no approval/module/private call",
+    "PASS send_lifetime: 4 synthetic process cases (2 main, renderer, crashpad); no WeChat process/module/API used",
+    "PASS native listen failure survives socket/queue cleanup; normal return remains true; no messages",
+    "PASS actual worker: normal return, bind failure, listen failure separated (stand-in APIs only)"
+  ],
+  "macos_asan_ubsan_layout_assertions": 263,
+  "candidate_sha256": "7058b765cdae9a1b3db2cbf3befdb2992ddd5682f2f51cb365b11096c70fcba9",
+  "candidate_bytes": 428544,
+  "production_input_sha256": {
+    "build/build-send-fix.ps1": "2b125aad56ccdcb7df055eb53f63f85e2877163531959b8c4846f33d47113b4d",
+    "build/test-contact-lookup.ps1": "d561deec5e7b02ce093aa8d8979f04b3a25ed9297d923d5277430b527f62ada2",
+    "build/test-native-ownership.ps1": "e1c6a16509873e57c36b738229e93dce37ad9bae139733037d779efc5cd2fb45",
+    "build/test-send-startup.ps1": "ac233fdbd5aa2d2f77c493b01410d9bb1db5929145a0fde656a33b85eea397ef",
+    "include/ForwardXMLMsg.h": "4e30fd6badb945d0e91a060e97094f9132a8a6a49b8673510a8be9b3a8360023",
+    "include/GetSelfProfile.h": "17c7dff189b0bd4ed78668d973db1e3f5d7063aaffabefbc84af8f5160a45a10",
+    "include/HookManager.h": "a79a901b8b2a7a3286ef6ab4e79112ea9a27168bf0f86dbda055c77d250bb3a0",
+    "include/Hook_Method.h": "d35813600543329fc1170f624b11ac473f1d97e17f1468935a79e82a2a79af34",
+    "include/QueryDB.h": "e43aa610a0224f2da26fc11a71cc8e8e1627caedc405b3b8858e02c148035923",
+    "include/SendImageMsg.h": "7c6bce790d25155e9ec55fce2cff07717b51df02f3a66058ba0ae75b618946bc",
+    "include/SendTextMsg.h": "2409aed8735ea42c2c92311914abce340062ac148313c5603592ba16d3ffd375",
+    "include/contact_lookup.h": "d2cc5328a320bd14d9e4ed942359a1270fe87f59f9eb392e4c1a88551ead79b6",
+    "include/global.h": "337e826b6e26ff2faae12367e051487fbbf1668b2c82a39d82c18cc87f4ea6b3",
+    "include/hideself.h": "34f22322eb38d3e32ca44eb9dd4bc2db26106c23ca0e8d1fff4ce1f424bca534",
+    "include/hook_xlog.h": "98dd7313a99ce7d814272eb9ce9bcaf6f688702c9ef66ee6ec9fc33a5d5d7ee0",
+    "include/http_post.h": "1190ea865eecc5e406748898d6e99daa20865009b5c97c0a69b3bc92bc519b00",
+    "include/http_routes.h": "7f1466ebdccf117b8b7166544123f420f557b8110bb3b6bc98e3a5caea45eed5",
+    "include/http_server.h": "bc2d59813da0dcd72677aef8e51eeeb7b2f033ca1f45ae62284565b17765a985",
+    "include/httplib.h": "73f482d242a4389ce1c7d57e8e919b079345ed354fa4357afd9187784586b17d",
+    "include/httplib_core.h": "9952fab95e1d69d37260610fec6ab61031d5ed5ba6b44ffe938fde8829b9c23d",
+    "include/inline_weixin_dll_load.h": "2853a0c9aabc1beb82038db659bb1da225bcff5df4561f46014f3817c8013ced",
+    "include/json.hpp": "b04dc1b24725b5d6d5dc183e6cb35334e84cab361968e1cb49c7b1e322deec3d",
+    "include/json/README.md": "08f75ea6e2fc97ffdf0868a4d619f2446f5af4ff82edb7d343d0cf30eec76804",
+    "include/json/fifo_map.hpp": "07cb548167941f89d4e8b2be349e2af28fb3ed0cf679de06c009337ee5ebfc9f",
+    "include/json/json.hpp": "b04dc1b24725b5d6d5dc183e6cb35334e84cab361968e1cb49c7b1e322deec3d",
+    "include/json/order_json.hpp": "5dbe8539c5514d12abe4b36cee2eb3c24cdcd8edba52f6438712c2892f6263b7",
+    "include/lz4.h": "d9e637f399db845dab9df030a47a04bc61b4dec4f613da9ccb645684ff55c9a0",
+    "include/requests.h": "4605a780542f4e1756d2cc28bff2f2d1b6bf0887ca6dd8965d2fe661cb18bacc",
+    "include/send_api.h": "3dd9022f1552c5955c1f3fba4800a68cc3f0d12c34f3e67ec0c9cf1d9d02d199",
+    "include/send_context.h": "7c104025b77e229793c68e5ef77e894b612550c73d383de444b15b2bfa0d819b",
+    "include/send_layout.h": "2a545503b600ca1656d66fedb7aee7223564a149ff8ea74dc5fbe74e0522a144",
+    "include/send_native.h": "ca7b2c91a83ebfb15199712b908ce5f47766b37f6b380e9d7d802d21141d7231",
+    "include/send_retention.h": "e3a6a31332e870da35b5075bd1572040beaf3a6d19c46438e80684743a5717e4",
+    "include/send_routes.h": "c3ed426534cc49e2eaee877b9647ff0597688fa5314f51f8197f1b103a2133b5",
+    "include/send_startup.h": "0308420ddc95d0c18673fb6a47d23ba4d8bbe76aaeda6a7caf8b80571c294c72",
+    "include/tools.h": "c79e625f3f7dcaf9a2e43c8bd73a345c0f12ac47969a216abd04ea62a39fb9c2",
+    "include/version_proxy.h": "6a9c9f1861ca3f6d95fcf69135c794621ca368cb3dba76cf3a8a5d8b9e251e38",
+    "include/wx_ini_reader.h": "814508bcb30c4abf126812251d26fe7bba84a2a95b463c51bbc4aedebe070072",
+    "include/wx_send.h": "5bf7913db0c7fe516793d00cb45ffabc92e2308844620065b94be7acbc6fbfce",
+    "include/wx_send_xml.h": "1bc706bee0f1b5a71b6ef8cc0526b4f102d7736288ac699ff82ec69057a2b665",
+    "src/ForwardXMLMsg.cpp": "3b96eebc8e70c66229eb2dd6857b49b0d0d0e0f1b138663a735b899f9f466728",
+    "src/GetSelfProfile.cpp": "412cffd9af27ce02328853fd0d6c91f40e6f2835a831abe5355b2451ff9b8791",
+    "src/HookManager.cpp": "6c1f38f8575a5a8d9260c58c6204627ec5ef1b87877496ac7ee801b6f7e7affd",
+    "src/Hook_Method.cpp": "807d097d75170518cefeef03df31527126c2bc768c792d9c129e3426dd2af6ec",
+    "src/QueryDB.cpp": "610364cccd2870cee7774ecec074b5a355e50d744952742f81d3100f02229e98",
+    "src/SendImageMsg.cpp": "e4a47a6b5708c733bd3b64c0b3d6df253c5525fda074c17960ba693e3def91a7",
+    "src/SendTextMsg.cpp": "9419b082e1fd3aebe36d728ff76c283a4c0aa0da00fbe37380a1019544b353f7",
+    "src/contact_lookup.cpp": "24fc834bcd5ea27138731694868d09949c65537c0051298b01e90092e44ecbb7",
+    "src/cpuid.asm": "de9937495d72c7a0a5e2a79acd039109a58a74ec93c71d3415343a1fae843ee5",
+    "src/dllmain_send.cpp": "16434cd236ce09afd06ca296c252158ebd3a50c86a22a9ce9e9241a323216d3f",
+    "src/global.cpp": "138d4d7760b6f8d04d91f12aaa1deb1b5e155630ca58858e73698458317e9b51",
+    "src/hideself.cpp": "9421b55d831845f78fc020a5c1db8a1ffa890046091e2a39ea6c792ef95c43ac",
+    "src/hook_xlog.cpp": "755202c10dc7721848ba04f2d445ab99f7d6989004002d7f472a88161cd1217f",
+    "src/http_post.cpp": "aa3bedab0852fc13f9aa460bde70be54869f984a79f0cc762bd6da3041f8de2e",
+    "src/http_routes.cpp": "f9d98cb9d4cb7e69c3f732b6f738b23806222b06d5870b9ababd1554740f4b48",
+    "src/http_server.cpp": "18de18a05db810003f504f6398aeb469945787df7f54bb2c17de155772889969",
+    "src/httplib_core.cpp": "da93c024a6ac8e546fb9981f669cbd51c7627fa44fb0c35ff39f5af4aa6d6cd9",
+    "src/inline_weixin_dll_load.cpp": "1ca09a156d38f2600e708eb4aeee8d0ad394dab629780b52437aaba2c042eaa6",
+    "src/lz4.c": "d24c41b4d8f00e8a51675f92aa0a80345fa2d6775e961d4481e47663519a5a74",
+    "src/requests.cpp": "3cf5492b3cfef2994b76f10afa12d63e84dcf3033fdcb7fab2d15ff414503b58",
+    "src/send_api.cpp": "843aad234391aa6f4c3e4a2d87510d95448a0ce4ae0d6f2c9e5c88d77ac7fa92",
+    "src/send_approval.cpp": "f1daa85ee1ffc6d88a8d8e51fd1bc57ff8453f556a64bb79746b4ba0a0561c76",
+    "src/send_native.cpp": "67d0e007e6a01836b7ea463b95e99cc4f825df2e169c9007689544d7a38c2632",
+    "src/send_ownership.inc": "e47710ce9ee9fe9d498f4757c05ef30d6d982b4942c3811a33075bcdf2bc5bf5",
+    "src/send_routes.cpp": "036f412000edefd60ccc4fa2d4f45633681a179f17c35e42100f086bbf0abdb4",
+    "src/tools.cpp": "82a005b8edb95a389c37a71d1828220b830a5fc8b6cfa23a6c53be845acbf81c",
+    "src/version_proxy.cpp": "7f80bdd73ea66d71e0f540967ec9cafc2f4a21712fac4024ee589df6a463f333",
+    "src/wx_ini_reader.cpp": "417427eaff451dc73c9656824dcb607d00425da6ccfd1c07364e91dbce666ab0",
+    "src/wx_send.cpp": "6776d531ec1e8bbc29ba9d4ea823f6088aefb491275d81b1d47e25f85ff5720f",
+    "src/wx_send_xml.cpp": "5b99c73fdf94ea20096840541d4025e0b621816c978b2183f3e3f3d394d250ad"
+  },
+  "runtime_upload_verified": false,
+  "real_post_count": 0,
+  "vw12_process_access": false,
+  "vw12_disk_read": "Copied exact installed Weixin.dll only for offline analysis",
+  "vw11_access": false,
+  "permit_created": false,
+  "account_safety_verified": false,
+  "limitations": [
+    "Native fixture substitutes queue; real upload business body forbidden",
+    "No server acceptance/delivery confirmation",
+    "No real Windows ASan/UBSan",
+    "Working-set samples are sampled bounds, not OS enforced memory ceilings"
+  ]
+}

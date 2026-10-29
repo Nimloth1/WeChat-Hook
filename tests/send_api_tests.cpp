@@ -366,7 +366,7 @@ int main()
             server.stop(); listener.join(); collision.stop();
             Check(status && status->status == 200 && json::parse(status->body)["IsLogin"].is_null());
             Check(request && request->status == 403);
-            Check(sql && sql->status == 404 && file && file->status == 501);
+            Check(sql && sql->status == 404 && file && file->status == 403);
             Check(invalid && invalid->status == 400);
             Check(sent && sent->status == 202 && duplicate && duplicate->status == 202 && backend.run == 1);
             Check(json::parse(sent->body)["IsSent"].is_null());
@@ -382,6 +382,38 @@ int main()
             const auto result = client.Post("/SendTextMsg",Body(),"application/json");
             server.stop(); listener.join();
             Check(result && result->status == 423 && backend.prepare == 0 && backend.run == 0);
+        }
+        {
+            auto body=json{{"request_id","offline-file-request-0001"},{"wxidorgid","12345678901@chatroom"},
+                {"path",u8R"(C:\fixture\中文报告.pdf)"},{"file_sha256",std::string(64,'a')}};
+            auto a=GroupPermit(body.dump(),"file");
+            const auto permit=temp.path/L"file-approval.json";Write(permit,PermitJson(a).dump());
+            Check(LoadApproval(permit.wstring()).enabled);
+            FakeBackend backend;int consumed=0;
+            Controller controller([&]{return LoadApproval(permit.wstring());},backend,[&](const Approval& value){
+                ++consumed;return ConsumeApproval(permit.wstring(),value);});
+            for(const auto& key:{"path","file_sha256","wxidorgid","request_id"}) {
+                auto bad=body;bad[key]=key==std::string("file_sha256")?std::string(64,'b'):bad[key].get<std::string>()+"x";
+                Check(controller.Dispatch(auth,"file",bad.dump()).http==403);
+            }
+            for(const auto& key:{"file_sha256","image_sha256","extra"}) {
+                auto bad=body;if(key==std::string("file_sha256"))bad.erase(key);else bad[key]="x";
+                Check(controller.Dispatch(auth,"file",bad.dump()).http==400);
+            }
+            Check(controller.Dispatch(auth,"image",body.dump()).http==400);
+            Check(consumed==0 && backend.run==0);
+            httplib::Server server;RegisterSendRoutes(server,controller);
+            const auto port=server.bind_to_any_port("127.0.0.1");Check(port>0);
+            std::thread thread([&]{server.listen_after_bind();});server.wait_until_ready();
+            httplib::Client client("127.0.0.1",port);client.set_read_timeout(3,0);
+            const auto state=client.Get("/QueryDB/status");
+            const auto result=client.Post("/send_file_msg",httplib::Headers{{"Authorization",auth}},body.dump(),"application/json");
+            const auto replay=client.Post("/send_file_msg",httplib::Headers{{"Authorization",auth}},body.dump(),"application/json");
+            server.stop();thread.join();
+            Check(state && json::parse(state->body)["FileSendSupported"]==true && json::parse(state->body)["FileSendRuntimeVerified"]==false);
+            Check(result && result->status==202 && json::parse(result->body)["IsSent"].is_null());
+            Check(replay && replay->status==423 && backend.run==1 && consumed==1);
+            Check(!LoadApproval(permit.wstring()).enabled);
         }
         Check(GetModuleHandleW(L"Weixin.dll") == nullptr);
         std::cout << "PASS send_api checks=" << checks << "; fake backend only; no WeChat private function called\n";

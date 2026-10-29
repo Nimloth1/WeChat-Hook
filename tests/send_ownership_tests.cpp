@@ -33,6 +33,11 @@ struct Temporary {
             {"wxidorgid","12345678901@chatroom"},{"path",file.u8string()},
             {"image_sha256",Sha256(bytes.data(),bytes.size())}}.dump());
     }
+    Request File(int n) const {
+        return ParseRequest("file",nlohmann::json{{"request_id","offline-owned-file-"+std::to_string(n)},
+            {"wxidorgid","12345678901@chatroom"},{"path",file.u8string()},
+            {"file_sha256",Sha256(bytes.data(),bytes.size())}}.dump());
+    }
     bool Writable() const {
         auto h=CreateFileW(file.c_str(),GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
             nullptr,OPEN_EXISTING,0,nullptr);
@@ -43,7 +48,7 @@ struct FixtureBackend : Backend {
     NativeFixture& f; RetentionBudget& budget;
     FixtureBackend(NativeFixture& value,RetentionBudget& b):f(value),budget(b){}
     std::unique_ptr<PreparedCall> Prepare(const Request& r,const Approval&) override {
-        auto image=r.kind=="image"?OpenImage(r):LockedImage{};
+        auto image=r.kind=="image"?OpenImage(r):r.kind=="file"?OpenFile(r):LockedImage{};
         return std::make_unique<NativePrepared>(r,NativeFixture::base,f.Addresses(),std::move(image),budget);
     }
 };
@@ -62,14 +67,16 @@ static void __fastcall TestDelete(std::uint64_t p) { NativeFixture::Free(reinter
 int wmain(int argc,wchar_t** argv) {
     try {
         if(argc<2) throw std::runtime_error("requires_exact_native_sample_path");
-        const std::string mode=argc>2?fs::path(argv[2]).string():"normal";
+        const std::string full_mode=argc>2?fs::path(argv[2]).string():"normal";
+        const bool file_mode=full_mode.compare(0,5,"file-")==0;
+        const std::string mode=file_mode?full_mode.substr(5):full_mode;
         NativeFixture f(argv[1]);NativeOwnership();
         Check(GetModuleHandleW(L"Weixin.dll")==nullptr);
         RetentionBudget budget(16*1024*1024,256);
         Temporary temp;
         if(mode!="normal") {
             f.EnableUnwind();
-            const auto r=temp.Image(90000);
+            const auto r=file_mode?temp.File(90000):temp.Image(90000);
             std::shared_ptr<NativeModuleReference> module;
             if(mode=="metadata-fault") {
                 wchar_t directory[32768]{};Check(GetSystemDirectoryW(directory,32768)>0);
@@ -77,17 +84,17 @@ int wmain(int argc,wchar_t** argv) {
                 module->value=LoadLibraryW((fs::path(directory)/L"msimg32.dll").c_str());Check(module->value!=nullptr);
             }
             std::uintptr_t entry=mode=="params-fault"?offset::create_param2:mode=="submit-fault"?offset::send_message:
-                mode=="cleanup-fault"?native_state_destroy_rva:mode=="ctor-fault"?offset::txt_message_ctr:0;
+                mode=="cleanup-fault"?native_state_destroy_rva:mode=="ctor-fault"?(file_mode?0x6b2d30:offset::txt_message_ctr):0;
             if(entry) f.Patch(entry,reinterpret_cast<void*>(&NativeFixture::Forbidden));
             {
-                auto value=mode=="ctor-fault"?Text(90000):r;
-                auto image=value.kind=="image"?OpenImage(value):LockedImage{};
+                auto value=mode=="ctor-fault" && !file_mode?Text(90000):r;
+                auto image=value.kind=="image"?OpenImage(value):value.kind=="file"?OpenFile(value):LockedImage{};
                 NativePrepared p(value,NativeFixture::base,f.Addresses(),std::move(image),budget,module);
                 auto result=p.Run();Check(result.native_entered && result.http==202);
                 if(mode=="destroy-fault") {
                     f.Patch(0xa7f0,reinterpret_cast<void*>(&NativeFixture::Forbidden));f.DeleteTask(f.TakeTask());
                 } else if(mode=="clone-fault") {
-                    f.Patch(0x1778170,reinterpret_cast<void*>(&NativeFixture::Forbidden));
+                    f.Patch(file_mode?0x18e41f0:0x1778170,reinterpret_cast<void*>(&NativeFixture::Forbidden));
                     const auto task=f.TakeTask();const auto object=f.Q(f.Q(task+8));
                     std::uint64_t pair[2]{};Check(CallClone(f.Q(f.Q(object)+32),object,pair));
                 } else if(mode=="metadata-fault") {
@@ -99,12 +106,12 @@ int wmain(int argc,wchar_t** argv) {
             Check(NativeOwnership().Poisoned());NativeOwnership().Collect();
             if(module) {module.reset();Check(GetModuleHandleW(L"msimg32.dll")!=nullptr);}
             Check(budget.Usage().bytes==128*1024);
-            if(mode!="ctor-fault") Check(!temp.Writable());
+            if(mode!="ctor-fault" || file_mode) Check(!temp.Writable());
             bool refused=false;
             try{NativePrepared p(Text(90001),NativeFixture::base,f.Addresses(),LockedImage{},budget);}
             catch(const std::runtime_error& e){refused=std::string(e.what())=="native_ownership_fault_requires_investigation";}
             Check(refused);
-            std::cout<<"PASS ownership_fault mode="<<mode<<" checks="<<checks<<"; quarantined, no retry\n"<<std::flush;
+            std::cout<<"PASS ownership_fault mode="<<full_mode<<" checks="<<checks<<"; quarantined, no retry\n"<<std::flush;
             // 故障状态不提供重置入口；独立测试进程由 OS 统一回收保守保留量。
             ExitProcess(0);
         }
@@ -229,13 +236,38 @@ int wmain(int argc,wchar_t** argv) {
             f.fail_at=-1;NativeOwnership().Collect();
             Check(!NativeOwnership().Poisoned() && f.Live()==0 && budget.Usage().bytes==0);
         }
+        {
+            const auto old=temp.file;temp.file=temp.directory/L"\x4e2d\x6587\x7814\x62a5.pdf";
+            fs::rename(old,temp.file);
+            auto r=temp.File(44);
+            {NativePrepared p(r,NativeFixture::base,f.Addresses(),OpenFile(r),budget);
+             Check(p.Run().error=="native_result_not_delivery_receipt");}
+            auto task=f.TakeTask(); const auto object=f.Q(f.Q(task+8));
+            Check(f.Q(object+0xd8)==0x600000031 && f.Q(object+0x188)==temp.bytes.size());
+            auto child=Clone(f,object); auto grandchild=Clone(f,child+16);
+            f.DeleteTask(task); NativeOwnership().Collect(); Check(!temp.Writable());
+            WideString path{};std::memcpy(&path,reinterpret_cast<void*>(grandchild+0xf0),32);
+            NarrowString name{},ext{};std::memcpy(&name,reinterpret_cast<void*>(grandchild+0x178),32);
+            std::memcpy(&ext,reinterpret_cast<void*>(grandchild+0x118),32);
+            Check(std::string(name.capacity>15?name.data.heap:name.data.local,name.length)==u8"中文研报.pdf"
+                && std::string(ext.data.local,ext.length)=="pdf");
+            auto stable=std::wstring(reinterpret_cast<wchar_t*>(path.data.heap),path.length);
+            Handle h(CreateFileW(stable.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr));
+            Check(h.value!=INVALID_HANDLE_VALUE && HashOpenFile(h.value,1024)==r.file_sha256);
+            CloseHandle(h.value);h.value=INVALID_HANDLE_VALUE;
+            f.Release(child);NativeOwnership().Collect();Check(!temp.Writable());
+            f.Release(grandchild);NativeOwnership().Collect();Check(temp.Writable() && f.Live()==0 && budget.Usage().handles==0);
+            fs::rename(temp.file,old);temp.file=old;
+        }
         DWORD baseline=0;Check(GetProcessHandleCount(GetCurrentProcess(),&baseline));
         for(int i=0;i<10000;++i) {
-            f.Budget();auto r=i%2?temp.Image(100+i):Text(100+i);
-            {auto image=r.kind=="image"?OpenImage(r):LockedImage{};
+            f.Budget();auto r=i%3==0?temp.File(100+i):i%3==1?temp.Image(100+i):Text(100+i);
+            {auto image=r.kind=="image"?OpenImage(r):r.kind=="file"?OpenFile(r):LockedImage{};
              NativePrepared p(r,NativeFixture::base,f.Addresses(),std::move(image),budget);
              Check(p.Run().error=="native_result_not_delivery_receipt");}
-            auto task=f.TakeTask();auto copy=f.CopyTask(task);f.DeleteTask(task);f.DeleteTask(copy);
+            auto task=f.TakeTask();auto copy=f.CopyTask(task);
+            auto child=r.kind=="file"?Clone(f,f.Q(f.Q(task+8))):0;
+            f.DeleteTask(task);f.DeleteTask(copy);if(child)f.Release(child);
             NativeOwnership().Collect();Check(f.Live()==0 && budget.Usage().bytes==0 && budget.Usage().handles==0);
         }
         DWORD after=0;Check(GetProcessHandleCount(GetCurrentProcess(),&after));

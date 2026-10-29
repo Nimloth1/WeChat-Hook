@@ -27,6 +27,8 @@ struct LockedImage {
     LockedImage(LockedImage&& other) noexcept;
     void RetainOnNativeEntry() noexcept { retained = true; }
 };
+// 文件复用相同的稳定路径/句柄锁；名称保留以兼容现有图片调用方。
 LockedImage OpenImage(const Request& request);
+LockedImage OpenFile(const Request& request);
 std::string HashOpenFile(HANDLE file, std::uint64_t maximum);
 } // namespace send_fix

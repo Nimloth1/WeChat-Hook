@@ -46,6 +46,8 @@ function Run-Bounded([string]$Name,[string]$File,[string]$Arguments){
 }
 Run-Bounded 'ownership-build' $env:ComSpec ('/d /c "'+$cmd+'"')
 $exe=Join-Path $out 'send_ownership_tests.exe'
-foreach($mode in @('normal','ctor-fault','params-fault','submit-fault','cleanup-fault','destroy-fault','clone-fault','metadata-fault')){
+foreach($mode in @('normal','ctor-fault','params-fault','submit-fault','cleanup-fault','destroy-fault','clone-fault','metadata-fault',
+ 'file-ctor-fault','file-params-fault','file-submit-fault','file-cleanup-fault',
+ 'file-destroy-fault','file-clone-fault','file-metadata-fault')){
  Run-Bounded ('ownership-'+$mode) $exe ('"'+$NativeSample+'" '+$mode)
 }

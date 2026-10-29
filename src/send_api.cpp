@@ -30,18 +30,20 @@ std::string Sha256(const void* data, std::size_t size)
 
 Request ParseRequest(const std::string& kind, const std::string& body)
 {
-    if (body.size() > 32768 || (kind != "text" && kind != "image"))
+    if (body.size() > 32768 || (kind != "text" && kind != "image" && kind != "file"))
         throw std::invalid_argument("invalid_request");
     const auto value = nlohmann::json::parse(body);
     const char* payload = kind == "text" ? "msg" : "path";
+    const char* digest = kind == "file" ? "file_sha256" : "image_sha256";
     if (!value.is_object() || value.size() != (kind == "text" ? 3 : 4)
         || !value.contains("request_id") || !value["request_id"].is_string()
         || !value.contains("wxidorgid") || !value["wxidorgid"].is_string()
         || !value.contains(payload) || !value[payload].is_string()
-        || (kind == "image" && (!value.contains("image_sha256") || !value["image_sha256"].is_string())))
+        || (kind != "text" && (!value.contains(digest) || !value[digest].is_string())))
         throw std::invalid_argument("invalid_request_fields");
     Request result{kind, value["request_id"].get<std::string>(), value["wxidorgid"].get<std::string>(),
         value[payload].get<std::string>(), kind == "image" ? value["image_sha256"].get<std::string>() : "", {}};
+    if (kind == "file") result.file_sha256 = value[digest].get<std::string>();
     const auto identifier = [](const std::string& input, std::size_t low, std::size_t high) {
         return input.size() >= low && input.size() <= high
             && std::all_of(input.begin(), input.end(), [](char c) {
@@ -58,13 +60,17 @@ Request ParseRequest(const std::string& kind, const std::string& body)
         return c == ' ' || c == '\n' || c == '\r' || c == '\t';
     })) throw std::invalid_argument("empty_message");
     if (kind == "image" && !IsHexHash(result.image_sha256)) throw std::invalid_argument("invalid_image_hash");
+    if (kind == "file" && !IsHexHash(result.file_sha256)) throw std::invalid_argument("invalid_file_hash");
     return result;
 }
 
 std::string Fingerprint(const Request& request)
 {
-    const auto text = nlohmann::json{{"kind",request.kind},{"recipient",request.recipient},
-        {"value",request.value},{"image_sha256",request.image_sha256}}.dump();
+    auto value = nlohmann::json{{"kind",request.kind},{"recipient",request.recipient},
+        {"value",request.value},{"image_sha256",request.image_sha256}};
+    // 保留已部署文字/图片许可的摘要格式；附件使用独立且不能混淆的字段。
+    if (request.kind == "file") { value.erase("image_sha256"); value["file_sha256"] = request.file_sha256; }
+    const auto text = value.dump();
     return Sha256(text.data(), text.size());
 }
 
@@ -144,7 +150,8 @@ Result Controller::Dispatch(const std::string& authorization, const std::string&
             "function_address_not_executable","data_address_not_readable","send_context_unavailable",
             "image_requires_local_absolute_path","image_path_not_stable","image_file_invalid","image_header_invalid",
             "image_format_unsupported","image_hash_mismatch","file_size_invalid","file_read_failed",
-            "file_changed","hash_failed","guid_failed"})
+            "file_changed","hash_failed","guid_failed","attachment_hash_mismatch","attachment_name_invalid",
+            "attachment_requires_local_absolute_path","attachment_path_not_stable","attachment_file_invalid"})
             if (code == known) return {422,"not_attempted",code};
         return {422,"not_attempted","native_preflight_failed"};
     }

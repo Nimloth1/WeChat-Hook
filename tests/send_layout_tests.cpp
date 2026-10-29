@@ -164,6 +164,26 @@ int main()
             }
             Check(heap.live.empty());
         }
+        {
+            TestHeap heap;
+            {
+                Arena arena(heap);std::u16string path=u"C:\\fixture\\"+std::u16string(2100,u'图')+u".pdf";
+                auto frame=BuildFrame(arena,address,"12345678901@chatroom","",&path,123,"offline-file-guid",true,true,u8"中文研报.pdf");
+                Check(frame.file && frame.image && heap.live.at(frame.object)==0x718);
+                auto object=static_cast<char*>(frame.object)+16;
+                for(auto offset:{0xb0,0x108,0x168,0x6a8})Put64(object,offset+24,15);
+                Put64(object,0xe0+24,7);FinishFileFrame(frame,123);
+                std::uint64_t type=0,size=0;std::memcpy(&type,object+0xd8,8);std::memcpy(&size,object+0x188,8);
+                Check(type==0x600000031 && size==123 && frame.file_path.length==path.size());
+                std::uint64_t counts=0;std::memcpy(&counts,static_cast<char*>(frame.object)+8,8);
+                Check(counts==0x200000001);
+                Check(std::memcmp(object+0x168,&frame.filename,32)==0 && std::memcmp(object+0x6a8,&frame.text,32)==0);
+                Put64(object,0xe0+24,15);bool failed=false;
+                try{FinishFileFrame(frame,123);}catch(const std::runtime_error&){failed=true;}
+                Check(failed);
+            }
+            Check(heap.live.empty());
+        }
         std::cout << "PASS send_layout checks=" << checks << "; no WeChat module or process used\n";
         return 0;
     } catch (const std::exception& error) {
