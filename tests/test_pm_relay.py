@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import struct
 import sys
@@ -515,6 +516,28 @@ class RelayTest(unittest.TestCase):
         store = Store(store.root)
         with self.assertRaises(ValueError):
             store.claim(following, self.p, now=time.time() + 200)
+
+    def test_guest_entry_starts_with_isolated_import_path(self):
+        tools = Path(__file__).resolve().parents[1] / "tools"
+        entry = self.root / "执行器 code"
+        entry.mkdir()
+        for name in ["relay_guest.py", "relay_common.py"]:
+            shutil.copyfile(tools / name, entry / name)
+        foreign = self.root / "unrelated cwd"
+        foreign.mkdir()
+        (foreign / "relay_common.py").write_text("raise RuntimeError('untrusted cwd module')\n")
+        env = {**os.environ, "PYTHONPATH": str(foreign)}
+        executables = [sys.executable]
+        if os.environ.get("RELAY_EMBEDDED_PYTHON"):
+            executables.append(os.environ["RELAY_EMBEDDED_PYTHON"])
+        for executable in executables:
+            with self.subTest(executable=executable):
+                result = subprocess.run([executable, "-I", "-B", str(entry / "relay_guest.py"), "--help"],
+                                        cwd=foreign, env=env, capture_output=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+                self.assertIn(b"--config", result.stdout)
+        self.assertEqual({p.name for p in entry.iterdir()}, {"relay_guest.py", "relay_common.py"})
+        self.assertEqual({p.name for p in foreign.iterdir()}, {"relay_common.py"})
 
     @unittest.skipUnless(os.name == "nt", "Windows 内核文件锁，仅在隔离 PW 上运行")
     def test_windows_executor_lock_and_crash_release(self):

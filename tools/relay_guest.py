@@ -11,6 +11,8 @@ import shutil
 import sys
 import time
 
+# 嵌入式 Python 的 ._pth 不包含脚本目录；只加入入口自身目录，不依赖 cwd/PYTHONPATH。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from relay_common import (HOOK_MODULE, MAX_WIRE, MIN_FREE, SOURCE_MODULE, Store, canonical,
                           digest, file_hash, native_fingerprint, validate_job, validate_policy)
 
