@@ -48,6 +48,10 @@ Run-Bounded 'ownership-build' $env:ComSpec ('/d /c "'+$cmd+'"')
 $exe=Join-Path $out 'send_ownership_tests.exe'
 foreach($mode in @('normal','ctor-fault','params-fault','submit-fault','cleanup-fault','destroy-fault','clone-fault','metadata-fault',
  'file-ctor-fault','file-params-fault','file-submit-fault','file-cleanup-fault',
- 'file-destroy-fault','file-clone-fault','file-metadata-fault')){
+ 'file-destroy-fault','file-clone-fault','file-metadata-fault',
+ 'link-ctor-fault','link-params-fault','link-submit-fault','link-cleanup-fault',
+ 'link-destroy-fault','link-clone-fault','link-metadata-fault',
+ 'video-ctor-fault','video-params-fault','video-submit-fault','video-cleanup-fault',
+ 'video-destroy-fault','video-clone-fault','video-metadata-fault')){
  Run-Bounded ('ownership-'+$mode) $exe ('"'+$NativeSample+'" '+$mode)
 }

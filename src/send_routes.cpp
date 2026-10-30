@@ -26,7 +26,10 @@ void RegisterSendRoutes(httplib::Server& server, Controller& controller)
             {"NativeResourceReclamationImplemented",true},{"NativeOwnershipMode","native_reference_ownership"},
             {"PendingMessageOwners",retention.pending_owners},{"NativeOwnershipFault",retention.ownership_fault},
             {"DeliveryConfirmed",false},
-            {"FileSendSupported",true},{"FileSendRuntimeVerified",false},{"FileByteLimit",100ULL*1024*1024},{"RuntimeCompatibilityVerified",false}};
+            {"FileSendSupported",true},{"FileSendRuntimeVerified",false},{"FileByteLimit",100ULL*1024*1024},
+            {"LinkCardSupported",true},{"LinkCardRuntimeVerified",false},{"LinkCardThumbnailSupported",false},
+            {"NativeVideoSupported",true},{"NativeVideoRuntimeVerified",false},{"NativeVideoContainer","mp4"},
+            {"NativeVoiceSupported",false},{"RuntimeCompatibilityVerified",false}};
         response.set_content(value.dump(),"application/json");
     });
     const auto route = [&](const char* path,const std::string& kind) {
@@ -44,5 +47,7 @@ void RegisterSendRoutes(httplib::Server& server, Controller& controller)
     route("/SendTextMsg","text");
     route("/SendImgMsg","image");
     route("/send_file_msg","file");
+    route("/send_link_msg","link");
+    route("/send_video_msg","video");
 }
 } // namespace send_fix

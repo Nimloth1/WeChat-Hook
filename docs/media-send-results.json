@@ -1,0 +1,247 @@
+{
+  "scope": {
+    "video": "native_type_43_mp4_with_jpeg_thumbnail_and_duration",
+    "audio": "ordinary_downloadable_attachment_not_voice_bubble",
+    "other_files": "existing_file_backend_no_extension_allowlist",
+    "link": "native_type_49_subtype_5_title_description_url_no_cover"
+  },
+  "base_commit": "7c15e47043d1226122b0cf5c2962d870fb029809",
+  "verified_utc": "2026-10-30T01:45:10.720737+00:00",
+  "native_sample": {
+    "version": "4.1.10.27",
+    "bytes": 183094832,
+    "sha256": "f487e4f56930456a25fb0d7b058c77e2dcd364e268d49bdfff4dc0e3be26ba36",
+    "disk_only_copy": true,
+    "process_memory_read": false
+  },
+  "windows_build": {
+    "ExitCode": 0,
+    "ElapsedSeconds": 104.7,
+    "SampledPeakTreeBytes": 222257152,
+    "Bytes": 452096,
+    "SHA256": "2B88A8D697B9A7A52FD0B5E1D60C7E1477970E96D918D2B4E5F9A779A55E8171",
+    "NoWeChatGuestAccess": true,
+    "SendingPermissionCreated": false
+  },
+  "windows_tests": [
+    {
+      "name": "send_layout",
+      "checks": 263
+    },
+    {
+      "name": "media_layout",
+      "checks": 503
+    },
+    {
+      "name": "retention_budget",
+      "checks": 18
+    },
+    {
+      "name": "native_preflight",
+      "checks": 2033
+    },
+    {
+      "name": "send_api",
+      "checks": 146
+    },
+    {
+      "name": "send_image",
+      "checks": 29
+    },
+    {
+      "name": "send_file",
+      "checks": 26
+    },
+    {
+      "name": "send_link",
+      "checks": 53
+    },
+    {
+      "name": "send_video",
+      "checks": 35
+    }
+  ],
+  "context_checks": 84,
+  "native_fixture": {
+    "assertions": 32158,
+    "cycles": 10000,
+    "allocations": 213167,
+    "frees": 213167,
+    "peak_native_parameter_bytes": 359680,
+    "handle_delta": 0,
+    "fault_modes": [
+      {
+        "mode": "ctor-fault",
+        "checks": 10
+      },
+      {
+        "mode": "params-fault",
+        "checks": 11
+      },
+      {
+        "mode": "submit-fault",
+        "checks": 11
+      },
+      {
+        "mode": "cleanup-fault",
+        "checks": 11
+      },
+      {
+        "mode": "destroy-fault",
+        "checks": 11
+      },
+      {
+        "mode": "clone-fault",
+        "checks": 12
+      },
+      {
+        "mode": "metadata-fault",
+        "checks": 16
+      },
+      {
+        "mode": "file-ctor-fault",
+        "checks": 11
+      },
+      {
+        "mode": "file-params-fault",
+        "checks": 11
+      },
+      {
+        "mode": "file-submit-fault",
+        "checks": 11
+      },
+      {
+        "mode": "file-cleanup-fault",
+        "checks": 11
+      },
+      {
+        "mode": "file-destroy-fault",
+        "checks": 11
+      },
+      {
+        "mode": "file-clone-fault",
+        "checks": 12
+      },
+      {
+        "mode": "file-metadata-fault",
+        "checks": 16
+      },
+      {
+        "mode": "link-ctor-fault",
+        "checks": 10
+      },
+      {
+        "mode": "link-params-fault",
+        "checks": 10
+      },
+      {
+        "mode": "link-submit-fault",
+        "checks": 10
+      },
+      {
+        "mode": "link-cleanup-fault",
+        "checks": 10
+      },
+      {
+        "mode": "link-destroy-fault",
+        "checks": 10
+      },
+      {
+        "mode": "link-clone-fault",
+        "checks": 11
+      },
+      {
+        "mode": "link-metadata-fault",
+        "checks": 15
+      },
+      {
+        "mode": "video-ctor-fault",
+        "checks": 11
+      },
+      {
+        "mode": "video-params-fault",
+        "checks": 11
+      },
+      {
+        "mode": "video-submit-fault",
+        "checks": 11
+      },
+      {
+        "mode": "video-cleanup-fault",
+        "checks": 11
+      },
+      {
+        "mode": "video-destroy-fault",
+        "checks": 11
+      },
+      {
+        "mode": "video-clone-fault",
+        "checks": 12
+      },
+      {
+        "mode": "video-metadata-fault",
+        "checks": 16
+      }
+    ],
+    "fault_assertions": 324,
+    "business_upload_body_executed": false,
+    "real_wechat_process_used": false
+  },
+  "macos_tests": [
+    {
+      "test": "send_layout_tests",
+      "exit": 0,
+      "sanitizers": [
+        "ASan",
+        "UBSan"
+      ],
+      "output": "PASS send_layout checks=263; no WeChat module or process used"
+    },
+    {
+      "test": "send_media_layout_tests",
+      "exit": 0,
+      "sanitizers": [
+        "ASan",
+        "UBSan"
+      ],
+      "output": "PASS media_layout checks=503; synthetic layouts only, real ABI tested separately on Windows"
+    }
+  ],
+  "build_input_source_hashes": {
+    "build/build-send-fix.ps1": "cfe554a8d24414edee7a37375408582ce8a930ff25c02452f33ed346bc12aa0d",
+    "build/test-native-ownership.ps1": "0b552ece02db569cebe66af115940e97fb50127d3821990cd9555fd920ab771d",
+    "include/send_api.h": "469457f2e87c7657cc07dca7351fac9093d2d308832a314cc937f84aaf78b659",
+    "include/send_layout.h": "c8d5de91f02ff67c909127e899ae81f39d7363c2a9c4420cf805ea3a74e9e54b",
+    "include/send_link.h": "aa9570b68818c1fef3dac50393f682a482ccd8030775c90168d6893123aa5b83",
+    "include/send_native.h": "8fdd2e3663c6f9fcffd8b591a624e270d6228c16f1b986c8e5234fb84f7f522f",
+    "include/send_video.h": "b7a48dde976114f407a12f0feb3290adff6dc3a4f4b01b028800e8fc9206a780",
+    "src/send_api.cpp": "1d2f545c7d5c0eb5547fcd953429ec49ed936e8bf94cb767c63fe1cebe622399",
+    "src/send_approval.cpp": "c62e35780e0d8a339e528864815e75bd081ea90a57c1170d59c60d7b70e81f58",
+    "src/send_native.cpp": "43eac8bf9264838c6a2d2efcc2c102e15224b015ff3ee9b0338b8ac04f9a19b9",
+    "src/send_ownership.inc": "4814631b03e15d1084b52d0a445e9b1b148efea6801c82dd4e6eb2fdb95dbb55",
+    "src/send_routes.cpp": "66167278541db9a6d6681da8bc78577034dfc57e5a50721fc0b44e58d13e8215",
+    "tests/native_ownership_fixture.h": "2ff7c6bacd30ef92bae002da6909fff7bb996b45cede865349b1126d1959aad8",
+    "tests/send_api_tests.cpp": "5eddf079583d81de442de21b5b8519d0cb03bfd504288bbb010da0df437556cf",
+    "tests/send_link_tests.cpp": "df9b63168c8eec44bede616fbeb99be37f4b12753d8e94c7e2d49666ac42ff97",
+    "tests/send_media_layout_tests.cpp": "a4788f33816b817cc114d15534c589119b0ff91006b097296f2e91efda8e04ec",
+    "tests/send_ownership_tests.cpp": "8fa4aab330fef29bf8b6cfc22b1eba3a30153c19ccc930e0ecfeb6652ffb6358",
+    "tests/send_video_tests.cpp": "6a55ee84ab9f97e73357beb7c989ce9a41af3fbefa9c2acfbb139830e8f12f96"
+  },
+  "source_bundle_sha256": "4e79f78fa198bf6f2581feca55c8f94e890d0d1ee1cca7185b3bf4d4d455c84e",
+  "candidate": {
+    "bytes": 452096,
+    "sha256": "2b88a8d697b9a7a52fd0b5e1d60c7e1477970e96d918d2b4e5f9a779a55e8171",
+    "deployed": false
+  },
+  "real_send_requests": 0,
+  "send_permits_created": false,
+  "account_or_login_operations": 0,
+  "VW11_accessed": false,
+  "real_playback_or_card_display_verified": false,
+  "synthetic_media_probed_only": true,
+  "limits": [
+    "Offline fixture forbids actual upload business body; no end-to-end or account-safety proof.",
+    "MP4/JPEG headers are not codec or full decoder validation; duration is supplied by the approved preparer.",
+    "No native voice bubble or link thumbnail."
+  ]
+}

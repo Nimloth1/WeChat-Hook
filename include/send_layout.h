@@ -129,6 +129,8 @@ struct Addresses {
     std::uint64_t param2_vtables[3]{};
     std::uint64_t context = 0; // Opaque argument-six value, not a pointer to dereference.
     std::uint64_t file_vtable = 0, file_vtable2 = 0;
+    std::uint64_t link_vtable = 0, link_vtable2 = 0;
+    std::uint64_t video_vtable = 0, video_vtable2 = 0;
 };
 
 struct Frame {
@@ -139,7 +141,7 @@ struct Frame {
     void* scratch = nullptr;
     NarrowString receiver{};
     NarrowString text{};
-    bool image = false, file = false;
+    bool image = false, file = false, link = false, video = false;
     WideString file_path{};
     NarrowString filename{}, extension{};
     void* state = nullptr; // 原生组合状态：24 字节 vector + 232 字节参数。
@@ -150,16 +152,28 @@ inline void Put64(void* destination, std::size_t offset, std::uint64_t value)
 
 inline Frame BuildFrame(Arena& arena, const Addresses& address, const std::string& recipient,
     const std::string& text, const std::u16string* image_path, std::uint64_t file_bytes,
-    const std::string& uuid, bool native = false, bool file = false, const std::string& filename = "")
+    const std::string& uuid, bool native = false, bool file = false, const std::string& filename = "", bool link = false, bool video = false)
 {
     Frame frame;
-    frame.image = image_path != nullptr;
+    frame.image = image_path != nullptr && !video;
     frame.file = file;
+    frame.link = link;
+    frame.video = video;
+    if (video && (!native || file || link || !image_path)) throw std::invalid_argument("video_requires_native_layout");
+    if (link && (!native || file || image_path)) throw std::invalid_argument("link_requires_native_layout");
     if (file && (!native || !image_path)) throw std::invalid_argument("file_requires_native_layout");
     frame.receiver = MakeNarrow(arena, recipient,native);
     // 保留旧分支的回归尺寸；原生工厂已确认控制块总尺寸为 0x758。
-    frame.object = arena.Allocate(file ? 0x718 : frame.image ? 0x7c0 : native ? 0x758 : 0x768 * sizeof(std::uint64_t));
-    if (file) {
+    frame.object = arena.Allocate(video ? 0x770 : link ? 0x8b8 : file ? 0x718 : frame.image ? 0x7c0 : native ? 0x758 : 0x768 * sizeof(std::uint64_t));
+    if (video) {
+        Put64(frame.object,0,address.video_vtable);
+        Put64(frame.object,8,0x100000001);
+        frame.file_path=MakeWide(arena,*image_path,true);
+        frame.filename=MakeNarrow(arena,filename,true);
+    } else if (link) {
+        Put64(frame.object,0,address.link_vtable);
+        Put64(frame.object,8,0x100000001);
+    } else if (file) {
         Put64(frame.object,0,address.file_vtable);
         Put64(frame.object,8,0x100000001);
         frame.text = MakeNarrow(arena,uuid,true); // 构造完成后把这份 UUID 所有权移入对象。

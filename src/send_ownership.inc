@@ -6,15 +6,18 @@ constexpr std::uint64_t native_state_destroy_rva = 0x1678000;
 
 struct RequestLease {
     LockedImage image;
+    LockedImage thumbnail;
     RetentionBudget::Reservation reservation;
     std::shared_ptr<NativeModuleReference> module;
     std::atomic<bool> quarantined{false};
-    RequestLease(LockedImage&& value, RetentionBudget& budget,std::shared_ptr<NativeModuleReference> reference={})
-        : image(std::move(value)), reservation(budget.Reserve(128*1024,
-              image.parents.size() + (image.file != INVALID_HANDLE_VALUE ? 1 : 0))),module(std::move(reference)) {}
+    RequestLease(LockedImage&& value, RetentionBudget& budget,std::shared_ptr<NativeModuleReference> reference={},LockedImage&& preview=LockedImage{})
+        : image(std::move(value)),thumbnail(std::move(preview)),reservation(budget.Reserve(128*1024,
+              image.parents.size() + (image.file != INVALID_HANDLE_VALUE ? 1 : 0)
+              + thumbnail.parents.size() + (thumbnail.file != INVALID_HANDLE_VALUE ? 1 : 0))),module(std::move(reference)) {}
     void Quarantine() noexcept {
         if (!quarantined.exchange(true)) {
             image.RetainOnNativeEntry();
+            thumbnail.RetainOnNativeEntry();
             reservation.RetainOnNativeEntry();
             if (module) module->retained.store(true);
         }
@@ -198,9 +201,9 @@ struct NativePrepared : PreparedCall {
     std::shared_ptr<RequestLease> lease;
     std::string uuid;
     NativePrepared(const Request& value,std::uint64_t module,const Addresses& addresses,LockedImage&& image,
-        RetentionBudget& budget=NativeRetentionBudget(),std::shared_ptr<NativeModuleReference> reference={})
-        : request(value),base(module),address(addresses),lease(std::make_shared<RequestLease>(std::move(image),budget,std::move(reference))),
-          uuid(value.kind != "text" ? Guid() : "") {
+        RetentionBudget& budget=NativeRetentionBudget(),std::shared_ptr<NativeModuleReference> reference={},LockedImage&& thumbnail=LockedImage{})
+        : request(value),base(module),address(addresses),lease(std::make_shared<RequestLease>(std::move(image),budget,std::move(reference),std::move(thumbnail))),
+          uuid(value.kind == "file" || value.kind == "image" ? Guid() : "") {
         if (NativeOwnership().Poisoned()) throw std::runtime_error("native_ownership_fault_requires_investigation");
     }
     Result Run() override {
@@ -211,14 +214,18 @@ struct NativePrepared : PreparedCall {
         // 到这里 Controller 已持久消耗许可；Prepare 不分配原生对象、不调用私有函数。
         std::unique_ptr<OwnershipRecord> record(new OwnershipRecord);
         record->lease=lease;
-        record->expected_control=request.kind == "file" ? address.file_vtable :
+        record->expected_control=request.kind == "video" ? address.video_vtable : request.kind == "link" ? address.link_vtable : request.kind == "file" ? address.file_vtable :
             request.kind == "image" ? address.image_vtable : address.text_vtable;
-        record->expected_image=request.kind == "file" ? address.file_vtable2 : address.image_vtable2;
+        record->expected_image=request.kind == "video" ? address.video_vtable2 : request.kind == "link" ? address.link_vtable2 : request.kind == "file" ? address.file_vtable2 : address.image_vtable2;
         Frame frame;
+        LinkStrings link_strings;
+        WideString thumbnail{};
         try {
             frame=BuildFrame(arena,address,request.recipient,request.kind == "text" ? request.value : "",
-                request.kind != "text" ? &lease->image.path : nullptr,lease->image.size,uuid,true,
-                request.kind == "file",request.value.substr(request.value.find_last_of('\\')+1));
+                request.kind == "image" || request.kind == "file" || request.kind == "video" ? &lease->image.path : nullptr,lease->image.size,uuid,true,
+                request.kind == "file",request.value.substr(request.value.find_last_of('\\')+1),request.kind == "link",request.kind == "video");
+            if(frame.link) link_strings=MakeLinkStrings(arena,request.title,request.description,request.value);
+            if(frame.video) thumbnail=MakeWide(arena,lease->thumbnail.path,true);
         } catch (...) {
             if (NativeOwnership().Poisoned()) arena.RetainOnNativeEntry();
             return {202,"unconfirmed","native_frame_allocation_failed_no_retry",true};
@@ -228,7 +235,17 @@ struct NativePrepared : PreparedCall {
             NativeOwnership().Poison(lease);
             return Result{202,"unconfirmed",error,true};
         };
-        if (frame.file) {
+        if (frame.video) {
+            if (!CallInit(base+0x18efd70,reinterpret_cast<std::uint64_t>(frame.object)+16))
+                return fault("video_constructor_fault_no_retry");
+            try { FinishVideoFrame(frame,thumbnail,lease->image.size,request.duration_seconds); }
+            catch (...) { return fault("video_constructor_layout_unknown_no_retry"); }
+        } else if (frame.link) {
+            if (!CallInit(base+0x2b52b90,reinterpret_cast<std::uint64_t>(frame.object)+16))
+                return fault("link_constructor_fault_no_retry");
+            try { FinishLinkFrame(frame,link_strings); }
+            catch (...) { return fault("link_constructor_layout_unknown_no_retry"); }
+        } else if (frame.file) {
             NarrowString empty_uuid{}; empty_uuid.capacity=15;
             // 复用两参数 SEH 调用桥，此处仅执行构造器，并非发送。
             if (!CallSubmit(base+0x6b2d30,reinterpret_cast<std::uint64_t>(frame.object)+16,
@@ -242,7 +259,7 @@ struct NativePrepared : PreparedCall {
             catch (...) { return fault("text_constructor_layout_unknown_no_retry"); }
         }
         try {
-            NativeOwnership().Observe(record.get(),reinterpret_cast<std::uint64_t>(frame.object),frame.image);
+            NativeOwnership().Observe(record.get(),reinterpret_cast<std::uint64_t>(frame.object),frame.image || frame.link || frame.video);
             record.release();
         } catch (...) { return fault("ownership_observer_failed_no_retry"); }
         if (!CallCreate(base+offset::create_param2,reinterpret_cast<std::uint64_t>(frame.arg2),
