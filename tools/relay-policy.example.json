@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "enabled": false,
+  "recipient": "11111111111@chatroom",
+  "source": "22222222222@chatroom",
+  "corporations": ["国泰君安期货", "GUOTAI JUNAN FUTURES SINGAPORE"],
+  "interval_seconds": 180,
+  "daily_messages": 120,
+  "daily_media_bytes": 67108864
+}

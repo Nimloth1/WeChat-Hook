@@ -1,0 +1,64 @@
+{
+  "base": "b3ecd6c34b24b4b24251ac7b96d0b5dd3918058e",
+  "scope": "Independent read-only JSONL tail + once-only VW12 executor; no DLL edits",
+  "tests": {
+    "macos": {
+      "run": 20,
+      "passed": 19,
+      "skipped": 1,
+      "interpreter": "Existing xiaomai venv"
+    },
+    "windows": {
+      "run": 20,
+      "passed": 20,
+      "skipped": 0
+    }
+  },
+  "macos_synthetic_cycle": {
+    "synthetic_media_bytes": 20971520,
+    "seconds": 0.524,
+    "peak_rss_bytes": 274989056,
+    "cycle_process_write_bytes": 78180352,
+    "idle_100_process_write_bytes": 0,
+    "post_attempts_fake_only": 1,
+    "actual_wechat_calls": 0,
+    "temporary_test_data_cleaned_on_exit": true
+  },
+  "windows_synthetic_cycle": {
+    "synthetic_media_bytes": 20971520,
+    "seconds": 1.89,
+    "peak_rss_bytes": 194990080,
+    "cycle_process_write_bytes": 189861055,
+    "idle_100_process_write_bytes": 0,
+    "post_attempts_fake_only": 1,
+    "actual_wechat_calls": 0,
+    "temporary_test_data_cleaned_on_exit": true
+  },
+  "limits": {
+    "per_media_bytes": 20971520,
+    "pending_payload_bytes": 104857600,
+    "database_bytes": 209715200,
+    "minimum_free_bytes": 1073741824,
+    "example_interval_seconds": 180,
+    "example_daily_messages": 120,
+    "example_daily_media_bytes": 67108864
+  },
+  "production": {
+    "enabled": false,
+    "deployed": false,
+    "new_watermark_created": false,
+    "wechat_send_attempts": 0,
+    "login_changed": false,
+    "VW11_accessed": false,
+    "xiaomai_source_or_config_changed": false,
+    "actual_cycle_measured": false
+  },
+  "files": {
+    "tools/relay_common.py": "ec457ae45bd560e0f7dec2a2fedff17845d5192b18679620a5999bf35cd91a03",
+    "tools/relay_guest.py": "a3f3e828de7f7c2cc21ba4fc191fdefbac2d8783979877c0aad1dd6cc1a379e0",
+    "tools/relay_pm.py": "dcd4779b15f8d404374284281a20e49c4d7610caa12878d3df444dbaac8e1c9f",
+    "tests/test_pm_relay.py": "b8e3642ebbc1a4ee30177d2833c5c20d02d499cd5dfcef950da7961e93a893fe",
+    "tests/measure_pm_relay.py": "6e59c2b95b7db16d72103e37f47125e7af5760e424c16d6fe11e31b9692cd2c1"
+  },
+  "verified_utc": "2026-10-30T03:19:02.935902+00:00"
+}
