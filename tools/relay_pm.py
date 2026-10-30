@@ -147,8 +147,14 @@ class Tail:
 
 def resolve_media(store, policy, decoder):
     with store.connect() as db:
-        rows = db.execute("SELECT id,payload FROM media WHERE state='waiting' ORDER BY created LIMIT 10").fetchall()
-    for key, payload in rows:
+        after = store.media_scan_after
+        rows = db.execute("SELECT rowid,id,payload FROM media WHERE state='waiting' AND rowid>? "
+                          "ORDER BY rowid LIMIT 10", (after,)).fetchall()
+        if len(rows) < 10:
+            rows += db.execute("SELECT rowid,id,payload FROM media WHERE state='waiting' AND rowid<=? "
+                               "ORDER BY rowid LIMIT ?", (after, 10 - len(rows))).fetchall()
+    for rowid, key, payload in rows:
+        store.media_scan_after = rowid
         item = json.loads(payload)
         event = item["event"]
         if time.time() - event["ts"] > 86400:

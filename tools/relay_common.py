@@ -115,6 +115,8 @@ class Store:
     """SQLite FULL 同步；无变化不 UPDATE，不把 HTTP202 当作送达。"""
     def __init__(self, root):
         self.root = Path(root)
+        # 附件轮询只在内存中记游标；空轮询不为调度位置写盘。
+        self.media_scan_after = 0
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path = self.root / "relay.sqlite"
         with self.connect() as db:
@@ -123,7 +125,7 @@ class Store:
                 CREATE TABLE IF NOT EXISTS jobs(
                   id TEXT PRIMARY KEY,digest TEXT NOT NULL,state TEXT NOT NULL,
                   evidence TEXT NOT NULL,created REAL NOT NULL,
-                  attempt REAL,media_bytes INTEGER NOT NULL DEFAULT 0);
+                  attempt REAL,completed REAL,media_bytes INTEGER NOT NULL DEFAULT 0);
                 CREATE INDEX IF NOT EXISTS jobs_state ON jobs(state,created);
                 CREATE TABLE IF NOT EXISTS payloads(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS media(
@@ -202,10 +204,12 @@ class Store:
                 return False
             if db.execute("SELECT 1 FROM jobs WHERE state IN ('dispatching','review_required') LIMIT 1").fetchone():
                 raise ValueError("unresolved_attempt")
-            last = db.execute("SELECT max(attempt) FROM jobs").fetchone()[0]
-            # 滚动24小时，避免时区/午夜清零和瞬时突发。
+            # PM 完成时已收到来宾完成回执，以完成时刻限流，涵盖远端准备/清理耗时。
+            # 两端均使用自己的完成时间；不把不同主机的绝对时间互相比较。
+            last = db.execute("SELECT max(coalesce(completed,attempt)) FROM jobs").fetchone()[0]
+            # 滚动配额同样保守地从完成计时，防止 PM 先释放旧任务的额度。
             count, size = db.execute("SELECT count(*),coalesce(sum(media_bytes),0) FROM jobs "
-                                     "WHERE attempt>?", (now - 86400,)).fetchone()
+                                     "WHERE coalesce(completed,attempt)>?", (now - 86400,)).fetchone()
             encoded = job["payload"].get("data_b64", "")
             media = len(encoded) // 4 * 3 - (len(encoded) - len(encoded.rstrip("=")))
             if ((last is not None and now - last < policy["interval_seconds"])
@@ -222,8 +226,9 @@ class Store:
             if row is None:
                 raise ValueError("bad_transition")
             evidence = {**json.loads(row[0]), **evidence}
-            n = db.execute("UPDATE jobs SET state=?,evidence=? "
-                           "WHERE id=? AND state='dispatching'", (state, canonical(evidence), job_id)).rowcount
+            n = db.execute("UPDATE jobs SET state=?,evidence=?,completed=max(attempt,?) "
+                           "WHERE id=? AND state='dispatching'",
+                           (state, canonical(evidence), time.time(), job_id)).rowcount
             if n != 1:
                 raise ValueError("bad_transition")
             db.execute("DELETE FROM payloads WHERE id=?", (job_id,))

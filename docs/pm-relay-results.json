@@ -3,21 +3,21 @@
   "scope": "Independent read-only JSONL tail + once-only VW12 executor; no DLL edits",
   "tests": {
     "macos": {
-      "run": 20,
-      "passed": 19,
+      "run": 24,
+      "passed": 23,
       "skipped": 1,
       "interpreter": "Existing xiaomai venv"
     },
     "windows": {
-      "run": 20,
-      "passed": 20,
+      "run": 24,
+      "passed": 24,
       "skipped": 0
     }
   },
   "macos_synthetic_cycle": {
     "synthetic_media_bytes": 20971520,
-    "seconds": 0.524,
-    "peak_rss_bytes": 274989056,
+    "seconds": 0.658,
+    "peak_rss_bytes": 275808256,
     "cycle_process_write_bytes": 78180352,
     "idle_100_process_write_bytes": 0,
     "post_attempts_fake_only": 1,
@@ -26,9 +26,9 @@
   },
   "windows_synthetic_cycle": {
     "synthetic_media_bytes": 20971520,
-    "seconds": 1.89,
-    "peak_rss_bytes": 194990080,
-    "cycle_process_write_bytes": 189861055,
+    "seconds": 2.079,
+    "peak_rss_bytes": 195129344,
+    "cycle_process_write_bytes": 189861054,
     "idle_100_process_write_bytes": 0,
     "post_attempts_fake_only": 1,
     "actual_wechat_calls": 0,
@@ -54,11 +54,25 @@
     "actual_cycle_measured": false
   },
   "files": {
-    "tools/relay_common.py": "ec457ae45bd560e0f7dec2a2fedff17845d5192b18679620a5999bf35cd91a03",
+    "tools/relay_common.py": "4266d136c61f798d37193e63c2dc871465a1ff0c506a5d2d7d832171eb692c97",
     "tools/relay_guest.py": "a3f3e828de7f7c2cc21ba4fc191fdefbac2d8783979877c0aad1dd6cc1a379e0",
-    "tools/relay_pm.py": "dcd4779b15f8d404374284281a20e49c4d7610caa12878d3df444dbaac8e1c9f",
-    "tests/test_pm_relay.py": "b8e3642ebbc1a4ee30177d2833c5c20d02d499cd5dfcef950da7961e93a893fe",
+    "tools/relay_pm.py": "b3c202bf176d8bcff56a27f4bdb05e9c351798de5148e50a8bb06282c4abdb14",
+    "tests/test_pm_relay.py": "1e6b3b829c606de520451469b47ba9a1c948e728061d2e8ef40fea827d6fe78b",
     "tests/measure_pm_relay.py": "6e59c2b95b7db16d72103e37f47125e7af5760e424c16d6fe11e31b9692cd2c1"
   },
-  "verified_utc": "2026-10-30T03:19:02.935902+00:00"
+  "verified_utc": "2026-10-30T04:28:47.912125+00:00",
+  "review_fixes": {
+    "reviewed_head": "5a1222bb4c71a9618354837beeb21752ceb0fc10",
+    "rate_jitter": "Persist local completion in terminal transaction; PM completion follows guest receipt; interval and rolling count/byte quotas use completion. Not-ready jobs remain local ready with no remote call.",
+    "media_starvation": "At most 10 waiting rows per call, rowid keyset plus wrap; in-memory cursor, no polling writes.",
+    "regressions": [
+      "variable startup/receipt delay and restart",
+      "rolling daily message/byte boundary",
+      "25 waiting rows, ready positions 11 and 25",
+      "new file and cursor reset after restart",
+      "waiting polls leave database content and mtime unchanged"
+    ],
+    "real_wechat_calls": 0,
+    "DLL_changed": false
+  }
 }

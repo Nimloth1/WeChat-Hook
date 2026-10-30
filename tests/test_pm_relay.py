@@ -244,13 +244,134 @@ class RelayTest(unittest.TestCase):
         store.accept(j1)
         store.accept(j2)
         self.assertTrue(store.claim(j1, self.p, now=100000))
-        store.finish(j1["id"], "submitted_unconfirmed", {"delivery_confirmed": False})
+        with mock.patch("time.time", return_value=100010):
+            store.finish(j1["id"], "submitted_unconfirmed", {"delivery_confirmed": False})
         store = Store(store.root)
         self.assertFalse(store.claim(j2, self.p, now=100179))
         self.assertFalse(store.claim(j2, {**self.p, "daily_messages": 1}, now=100200))
-        self.assertTrue(store.claim(j2, self.p, now=100180))
+        self.assertFalse(store.claim(j2, self.p, now=100180))
+        self.assertTrue(store.claim(j2, self.p, now=100190))
         with self.assertRaises(ValueError):
             store.claim(j2, self.p, now=100400)
+
+    def test_two_end_rate_jitter_waits_without_claim_or_retry(self):
+        for first_delay, second_delay, reply_delay in [(10, 1, 0), (1, 30, 4), (30, 0, 8)]:
+            with self.subTest(delays=(first_delay, second_delay, reply_delay)), tempfile.TemporaryDirectory() as folder:
+                clock = [100000.0]
+                with mock.patch("time.time", side_effect=lambda: clock[0]):
+                    pm, guest = Store(Path(folder) / "pm"), Store(Path(folder) / "guest")
+                    permit = Path(folder) / "permit.json"
+                    hook = FakeHook(permit)
+                    executor = Executor(guest, self.p, permit, hook, reclaim_timeout=0)
+                    first, second = text_job("first"), text_job("second")
+                    pm.accept(first)
+                    pm.accept(second)
+                    class Transport:
+                        delay = first_delay
+                        calls = 0
+                        def request(self, request):
+                            self.calls += 1
+                            clock[0] += self.delay
+                            result = executor.dispatch(request["job"])
+                            clock[0] += reply_delay
+                            return result
+                    transport = Transport()
+                    self.assertTrue(dispatch_once(pm, self.p, transport))
+                    completed = clock[0]
+                    pm = Store(pm.root)  # 间隔跨 PM 进程重启仍有效。
+                    before = pm.path.read_bytes(), pm.path.stat().st_mtime_ns
+                    for when in [100180.0, completed + 179.999]:
+                        clock[0] = when
+                        self.assertFalse(dispatch_once(pm, self.p, transport))
+                        self.assertEqual(pm.receipt(second["id"])["state"], "ready")
+                        self.assertIsNone(guest.receipt(second["id"]))
+                    self.assertEqual(before, (pm.path.read_bytes(), pm.path.stat().st_mtime_ns))
+                    self.assertEqual(transport.calls, 1)
+                    clock[0] = completed + 180
+                    transport.delay = second_delay
+                    self.assertTrue(dispatch_once(pm, self.p, transport))
+                    self.assertEqual(transport.calls, 2)
+                    self.assertEqual(len(hook.posts), 2)
+                    self.assertIsNone(pm.get("paused"))
+                    self.assertIsNone(guest.get("paused"))
+                    self.assertEqual(executor.dispatch(second)["post_attempts"], 0)
+
+    def test_two_end_daily_quotas_wait_from_completion(self):
+        for quota in ["daily_messages", "daily_media_bytes"]:
+            with self.subTest(quota=quota), tempfile.TemporaryDirectory() as folder:
+                clock = [100000.0]
+                with mock.patch("time.time", side_effect=lambda: clock[0]):
+                    first = media_job("file", "first")
+                    p = {**self.p, quota: 1 if quota == "daily_messages" else
+                         len(base64.b64decode(first["payload"]["data_b64"]))}
+                    pm, guest = Store(Path(folder) / "pm"), Store(Path(folder) / "guest")
+                    permit = Path(folder) / "permit.json"
+                    hook = FakeHook(permit)
+                    executor = Executor(guest, p, permit, hook, reclaim_timeout=0)
+                    class Transport:
+                        calls = 0
+                        def request(self, request):
+                            self.calls += 1
+                            clock[0] += 10 if self.calls == 1 else 1
+                            result = executor.dispatch(request["job"])
+                            clock[0] += 10
+                            return result
+                    transport = Transport()
+                    pm.accept(first)
+                    self.assertTrue(dispatch_once(pm, p, transport))
+                    completed = clock[0]
+                    clock[0] = completed + 86400 - 1
+                    second = media_job("file", "second")
+                    pm.accept(second)
+                    self.assertFalse(dispatch_once(pm, p, transport))
+                    self.assertEqual(transport.calls, 1)
+                    self.assertIsNone(guest.receipt(second["id"]))
+                    clock[0] = completed + 86400
+                    self.assertTrue(dispatch_once(pm, p, transport))
+                    self.assertEqual(len(hook.posts), 2)
+                    self.assertIsNone(pm.get("paused"))
+                    self.assertIsNone(guest.get("paused"))
+
+    def test_waiting_media_round_robin_is_bounded_and_noop_does_not_write(self):
+        source, store, tail = self.baseline()
+        md5s = [f"{i:032x}" for i in range(25)]
+        with source.open("a") as f:
+            for i, md5 in enumerate(md5s):
+                f.write(canonical(event(str(i), type=3, image_md5=md5)) + "\n")
+        self.assertEqual(tail.poll(), 25)
+        decoder = mock.Mock()
+        decoder.image.side_effect = lambda _, md5: (b"image", "image.png") if md5 in {md5s[10], md5s[24]} else None
+        for _ in range(3):
+            before = decoder.image.call_count
+            resolve_media(store, self.p, decoder)
+            self.assertLessEqual(decoder.image.call_count - before, 10)
+        requested = {call.args[1] for call in decoder.image.call_args_list}
+        self.assertEqual(requested, set(md5s))
+        self.assertEqual(store.status()["counts"], {"ready": 2})
+        before = store.path.read_bytes(), store.path.stat().st_mtime_ns
+        for _ in range(50):
+            resolve_media(store, self.p, decoder)
+        self.assertEqual(before, (store.path.read_bytes(), store.path.stat().st_mtime_ns))
+
+    def test_waiting_media_rotation_covers_new_file_and_restart(self):
+        source, store, tail = self.baseline()
+        with source.open("a") as f:
+            for i in range(10):
+                f.write(canonical(event(str(i), type=3, image_md5=f"{i:032x}")) + "\n")
+        tail.poll()
+        decoder = mock.Mock()
+        decoder.image.return_value = None
+        decoder.file.return_value = b"pdf", "new.pdf"
+        resolve_media(store, self.p, decoder)
+        with source.open("a") as f:
+            f.write(canonical(event("new-file", type=49, file={"name": "new.pdf", "size": 3})) + "\n")
+        tail.poll()
+        store = Store(store.root)  # 游标可重置，但不能每轮从头开始。
+        resolve_media(store, self.p, decoder)
+        self.assertIsNone(store.next_job())
+        resolve_media(store, self.p, decoder)
+        self.assertEqual(store.next_job()["kind"], "file")
+        decoder.file.assert_called_once_with("new.pdf", 3)
 
     def test_daily_byte_limit_and_pause(self):
         store = Store(self.root / "store")
