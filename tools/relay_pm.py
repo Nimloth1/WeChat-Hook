@@ -12,9 +12,12 @@ import struct
 import subprocess
 import sys
 import time
+import tempfile
+import ctypes
 
-from relay_common import (MAX_MEDIA, MAX_WIRE, Store, canonical, digest,
+from relay_common import (MAX_WIRE, Store, assets, asset_path, canonical, digest, file_hash,
                           make_job, validate_job, validate_policy)
+from relay_assets import BLOCK, reserve, signature, snapshot
 
 MAX_LINE = 1024 * 1024
 STOP = False
@@ -76,27 +79,36 @@ class Tail:
             sender = str(event.get("sender") or "")
             corp = "gtja sg" if event["sender_corp"].startswith("GUOTAI ") else "gtja"
             text = f"{sender}@{corp}：{text}"
-            if len(text.encode("utf-16le")) // 2 <= 2000:
-                return make_job(event, self.policy, "text", {"text": text}), "job"
-            data = text.encode()
-            if len(data) > MAX_MEDIA:
-                raise ValueError("long_text_too_large")
-            payload = {"filename": "原文.txt", "sha256": hashlib.sha256(data).hexdigest(),
-                       "data_b64": base64.b64encode(data).decode()}
-            return make_job(event, self.policy, "file", payload), "job"
+            return make_job(event, self.policy, "text", {"text": text}), "job"
+        sub = event["type"] >> 32
+        if base == 49 and sub in {1, 4, 5, 68}:
+            # 小麦现有 JSONL 仅保留渲染标题和最后一行 URL；不反查聊天库。
+            content = str(event.get("content") or "")
+            title, separator, url = content.rpartition("\n")
+            title = re.sub(r"^\[(链接|文章|应用消息)\]\s*", "", title)
+            if not separator:
+                raise ValueError("source_link_missing_url")
+            return make_job(event, self.policy, "link", {
+                "title": title, "description": "", "url": url}), "job"
         if base == 3 and re.fullmatch(r"[0-9a-f]{32}", str(event.get("image_md5") or "")):
             kind = "image"
         elif base == 49 and event.get("file") and not event.get("video"):
             spec = event["file"]
             if (not isinstance(spec, dict) or type(spec.get("size")) is not int
-                    or not 0 < spec["size"] <= MAX_MEDIA or not isinstance(spec.get("name"), str)):
+                    or spec["size"] <= 0 or not isinstance(spec.get("name"), str)):
                 raise ValueError("invalid_file_spec")
             kind = "file"
+        elif base == 43 and event.get("video"):
+            spec = event["video"]
+            if (not isinstance(spec, dict) or not re.fullmatch(r"[0-9a-f]{32}", str(spec.get("md5", "")))
+                    or type(spec.get("size")) is not int or spec["size"] <= 0):
+                raise ValueError("invalid_video_spec")
+            kind = "video"
         else:
             return None, "unsupported_type"
         # 仅存附件定位所需元数据，不复制完整聊天正文。
         small = {k: event.get(k) for k in ("conversation_id", "sender_corp", "server_id",
-                                          "local_id", "ts", "image_md5", "file")}
+                                          "local_id", "ts", "image_md5", "file", "video")}
         message_id = str(event.get("server_id") or event.get("local_id") or "")
         if not message_id:
             raise ValueError("source_missing_id")
@@ -159,91 +171,143 @@ def resolve_media(store, policy, decoder):
         event = item["event"]
         if time.time() - event["ts"] > 86400:
             raise ValueError("attachment_expired_requires_review")
+        path = asset_path(store.root, key, "media")
         if item["kind"] == "image":
-            loaded = decoder.image(event["conversation_id"], event["image_md5"])
+            loaded = decoder.image(event["conversation_id"], event["image_md5"], path)
+        elif item["kind"] == "video":
+            loaded = decoder.video(event["video"], path, asset_path(store.root, key, "thumbnail"))
         else:
             spec = event["file"]
-            loaded = decoder.file(spec["name"], spec["size"])
+            loaded = decoder.file(spec["name"], spec["size"], path)
         if loaded is None:
             continue
-        data, name = loaded
-        if not data or len(data) > MAX_MEDIA:
-            raise ValueError("attachment_size_limit")
-        media = {"filename": name, "sha256": hashlib.sha256(data).hexdigest(),
-                 "data_b64": base64.b64encode(data).decode()}
-        job = make_job(event, policy, item["kind"], media)
+        job = make_job(event, policy, item["kind"], loaded)
         with store.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             store.add(db, job)
             db.execute("UPDATE media SET state='ready' WHERE id=? AND state='waiting'", (key,))
 
+def media_tool(command, timeout, root):
+    """只监控自建的媒体子进程；不观察或结束微信进程。"""
+    if sys.platform != "darwin":
+        raise ValueError("media_tools_require_PM")
+    from ctypes import c_uint8, c_uint64, Structure
+    class Usage(Structure):
+        _fields_ = [("uuid", c_uint8 * 16)] + [(k, c_uint64) for k in (
+            "utime", "stime", "wakeups", "interrupts", "pageins", "wired", "resident", "footprint",
+            "start", "exit", "child_utime", "child_stime", "child_wakeups", "child_interrupts",
+            "child_pageins", "child_elapsed", "reads", "writes")]
+    lib = ctypes.CDLL("/usr/lib/libproc.dylib")
+    with tempfile.TemporaryFile(dir=root) as output:
+        process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output,
+                                   stderr=subprocess.DEVNULL, start_new_session=True)
+        deadline = time.monotonic() + timeout
+        try:
+            while process.poll() is None:
+                usage = Usage()
+                measured = lib.proc_pid_rusage(process.pid, 2, ctypes.byref(usage)) == 0
+                if ((measured and usage.resident > 512 * 1024 * 1024)
+                        or output.tell() > 4096 or time.monotonic() >= deadline):
+                    raise ValueError("media_tool_resource_budget")
+                time.sleep(0.05)
+            output.seek(0)
+            raw = output.read(4097)
+            if process.returncode or len(raw) > 4096:
+                raise ValueError("media_tool_failed")
+            return raw
+        finally:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+
 
 class Decoder:
     def __init__(self, cfg):
         sys.path.insert(0, cfg["xiaomai_root"])
-        from app.ingest.image import ImageDecoder, image_size
+        from app.ingest.image import ImageDecoder
         from Crypto.Cipher import AES
         self.decoder = ImageDecoder(cfg["account_dir"])
-        self.image_size = image_size
         self.aes = AES
+        self.ffmpeg = cfg.get("ffmpeg", "/opt/homebrew/bin/ffmpeg")
+        self.ffprobe = cfg.get("ffprobe", "/opt/homebrew/bin/ffprobe")
 
-    @staticmethod
-    def read_bounded(path):
+    def decode(self, path, destination):
+        from PIL import Image
         with Path(path).open("rb") as f:
-            data = f.read(MAX_MEDIA + 1)
-        if len(data) > MAX_MEDIA:
-            raise ValueError("source_media_size_limit")
-        return data
-
-    def decode(self, path):
-        # 小麦相同的 V2 解码步骤/缓存密钥推导，区别仅在于输入是有界读取。
-        # 不调用原 decode(path) 的无限制 read，以免客户端并发增长越过预算。
-        data = self.read_bounded(path)
-        if not data.startswith(b"\x07\x08V2\x08\x07") or len(data) < 31:
-            return None
-        aes_size, xor_size = struct.unpack("<II", data[6:14])
-        body = data[15:]
-        padded = aes_size + 16 - aes_size % 16
-        if padded + xor_size > len(body):
-            return None
-        for _ in range(2):
-            if self.decoder._key is None:
-                self.decoder._key = self.decoder._derive(data)
+            before = os.fstat(f.fileno())
+            header = f.read(31)
+            if len(header) < 31 or not header.startswith(b"\x07\x08V2\x08\x07"):
+                return None
+            aes_size, xor_size = struct.unpack("<II", header[6:14])
+            padded = aes_size + 16 - aes_size % 16
+            if 15 + padded + xor_size > before.st_size:
+                return None
+            for _ in range(2):
                 if self.decoder._key is None:
-                    return None
-            key, xor = self.decoder._key
-            head = self.aes.new(key, self.aes.MODE_ECB).decrypt(body[:padded])
-            if head.startswith((b"\xff\xd8\xff", b"\x89PNG")):
-                break
-            self.decoder._key = None
-        else:
-            return None
-        head = head[:-head[-1]]
-        mid = body[padded:len(body) - xor_size]
-        tail = bytes(b ^ xor for b in body[len(body) - xor_size:])
-        return head + mid + tail
+                    self.decoder._key = self.decoder._derive(header)
+                    if self.decoder._key is None:
+                        return None
+                key, xor = self.decoder._key
+                cipher = self.aes.new(key, self.aes.MODE_ECB)
+                head = cipher.decrypt(header[15:31])
+                if head.startswith((b"\xff\xd8\xff", b"\x89PNG")):
+                    break
+                self.decoder._key = None
+            else:
+                return None
+            reserve(destination.parent, before.st_size)
+            with destination.open("xb") as out:
+                f.seek(15)
+                remaining = padded
+                while remaining:
+                    block = f.read(min(BLOCK, remaining))
+                    if not block or len(block) % 16:
+                        raise ValueError("image_source_changed")
+                    plain = cipher.decrypt(block)
+                    remaining -= len(block)
+                    if not remaining:
+                        pad = plain[-1]
+                        if not 1 <= pad <= 16 or plain[-pad:] != bytes([pad]) * pad:
+                            raise ValueError("image_padding_invalid")
+                        plain = plain[:-pad]
+                    reserve(destination.parent, len(plain))
+                    out.write(plain)
+                middle = before.st_size - 15 - padded - xor_size
+                for size, encrypted in ((middle, False), (xor_size, True)):
+                    while size:
+                        block = f.read(min(BLOCK, size))
+                        if not block:
+                            raise ValueError("image_source_changed")
+                        reserve(destination.parent, len(block))
+                        out.write(bytes(x ^ xor for x in block) if encrypted else block)
+                        size -= len(block)
+                if f.read(1) or signature(os.fstat(f.fileno())) != signature(before) or signature(Path(path).stat()) != signature(before):
+                    raise ValueError("image_source_changed")
+                out.flush()
+                os.fsync(out.fileno())
+        with Image.open(destination) as image:
+            width, height = image.size
+            extension = ".png" if image.format == "PNG" else ".jpg"
+        return {"filename": Path(path).stem + extension, "size": destination.stat().st_size,
+                "sha256": file_hash(destination)}, (width * height, destination.stat().st_size)
 
-    def image(self, conversation, md5):
+    def image(self, conversation, md5, destination):
+        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if destination.exists():
+            raise ValueError("unresolved_spool")
         best, score = None, (0, 0)
         for path in self.decoder.find(conversation, md5):
-            p = Path(path)
-            # 原解码器整文件读取，因此先限制输入文件，而不只限制输出。
-            if p.stat().st_size > MAX_MEDIA:
-                raise ValueError("encrypted_image_size_limit")
-            data = self.decode(path)
-            if not data:
-                continue
-            if len(data) > MAX_MEDIA:
-                raise ValueError("decoded_image_size_limit")
-            width, height = self.image_size(data)
-            current = (width * height, len(data))
-            if current > score:
-                score = current
-                best = data, md5 + (".png" if data.startswith(b"\x89PNG") else ".jpg")
+            candidate = destination.with_suffix(".candidate")
+            try:
+                result = self.decode(path, candidate)
+                if result and result[1] > score:
+                    best, score = result
+                    os.replace(candidate, destination)
+            finally:
+                candidate.unlink(missing_ok=True)
         return best
 
-    def file(self, name, size):
-        # 沿用小麦的名称/重名后缀/大小规则，但不能无限制整文件读取。
+    def file(self, name, size, destination):
         base = Path(self.decoder.account_dir) / "msg" / "file"
         stem, dot, ext = name.rpartition(".")
         if not dot:
@@ -257,16 +321,46 @@ class Decoder:
                 if path.name != name and not re.fullmatch(
                         re.escape(stem) + r"\(\d+\)" + re.escape(dot + ext), path.name):
                     continue
-                if not path.is_file() or path.stat().st_size != size:
-                    continue
-                data = self.read_bounded(path)
-                if len(data) == size:
-                    return data, name
+                if path.is_file() and path.stat().st_size == size:
+                    result = snapshot(path, destination, name, size)
+                    if result:
+                        return result
+        return None
+
+    def video(self, spec, destination, thumbnail):
+        base = Path(self.decoder.account_dir) / "msg" / "video"
+        for path in sorted(base.glob("*/" + spec["md5"] + ".mp4"), reverse=True):
+            if path.stat().st_size != spec["size"]:
+                continue
+            media = snapshot(path, destination, spec["md5"] + ".mp4", spec["size"])
+            if media is None:
+                continue
+            with destination.open("rb") as f:
+                if f.read(8)[4:8] != b"ftyp":
+                    raise ValueError("video_not_mp4")
+            # 仅处理稳定副本；只启用本地 file/pipe 协议，不下载、不转码源视频。
+            common = ["-v", "error", "-max_alloc", "67108864", "-protocol_whitelist", "file,pipe"]
+            raw = media_tool([self.ffprobe, *common, "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", str(destination)], 30, destination.parent)
+            seconds = float(raw.strip())
+            if not math.isfinite(seconds) or not 0 < seconds <= 86400:
+                raise ValueError("video_duration_invalid")
+            reserve(thumbnail.parent, 16 * 1024 * 1024)
+            media_tool([self.ffmpeg, *common, "-nostdin", "-threads", "1",
+                "-i", str(destination), "-map", "0:v:0", "-frames:v", "1",
+                "-vf", "scale=640:640:force_original_aspect_ratio=decrease", "-threads", "1",
+                "-c:v", "mjpeg", "-f", "image2", "-n", str(thumbnail)], 60, destination.parent)
+            if not thumbnail.is_file():
+                raise ValueError("video_thumbnail_failed")
+            return {"media": media, "thumbnail": {"filename": "cover.jpg",
+                "size": thumbnail.stat().st_size, "sha256": file_hash(thumbnail)},
+                "duration_seconds": math.ceil(seconds)}
         return None
 
 
 class Transport:
     def __init__(self, cfg):
+        self.root = Path(cfg["state_dir"])
         def literal(x):
             if not isinstance(x, str) or any(c in x for c in "\x00\r\n"):
                 raise ValueError("invalid_remote_path")
@@ -280,17 +374,54 @@ class Transport:
         self.command = ["/usr/bin/ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
                         "VW12", "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
 
-    def request(self, request):
-        raw = canonical(request).encode()
+    def control(self, request):
+        raw = (canonical(request) + "\n").encode()
         if len(raw) > MAX_WIRE:
-            raise ValueError("wire_limit")
+            raise ValueError("control_memory_budget")
         r = subprocess.run(self.command, input=raw, capture_output=True, timeout=90)
-        if r.returncode or len(r.stdout) > 16384:
+        return self.response(r.returncode, r.stdout)
+
+    @staticmethod
+    def response(code, raw):
+        if code or len(raw) > 16384:
             raise ValueError("ssh_request_unknown_no_retry")
-        response = json.loads(r.stdout.decode("utf-8-sig"))
+        response = json.loads(raw.decode("utf-8-sig"))
         if not isinstance(response, dict) or response.get("ok") is not True:
             raise ValueError("guest_rejected_no_retry")
         return response
+
+    def upload(self, request, role, descriptor):
+        path = asset_path(self.root, request["job"]["id"], role)
+        header = {"operation": "upload", "policy_sha256": request["policy_sha256"],
+                  "job": request["job"], "role": role}
+        # 文件输入重定向避免 Python/ssh 管道互等；控制帧加文件流写入临时 wire 文件。
+        # 没有整块 base64，没有随文件大小增长的内存缓冲。
+        reserve(self.root, descriptor["size"])
+        with tempfile.TemporaryFile(dir=self.root) as wire:
+            wire.write((canonical(header) + "\n").encode())
+            with path.open("rb") as f:
+                before = os.fstat(f.fileno())
+                if before.st_size != descriptor["size"]:
+                    raise ValueError("spool_size_changed")
+                h = hashlib.sha256()
+                for block in iter(lambda: f.read(BLOCK), b""):
+                    reserve(self.root, len(block))
+                    wire.write(block)
+                    h.update(block)
+                if signature(os.fstat(f.fileno())) != signature(before) or h.hexdigest() != descriptor["sha256"]:
+                    raise ValueError("spool_changed")
+            wire.seek(0)
+            # 大文件传输仅受实际超时约束；失败后不再进入 dispatch、不自动重传。
+            r = subprocess.run(self.command, stdin=wire, capture_output=True, timeout=900)
+            result = self.response(r.returncode, r.stdout)
+        if result.get("uploaded") != descriptor["sha256"]:
+            raise ValueError("upload_receipt_mismatch")
+
+    def request(self, request):
+        if request.get("operation") == "dispatch":
+            for role, descriptor in assets(request["job"]).items():
+                self.upload(request, role, descriptor)
+        return self.control(request)
 
 
 def dispatch_once(store, policy, transport):
@@ -313,11 +444,16 @@ def dispatch_once(store, policy, transport):
                 or result.get("post_attempts") != 1):
             raise ValueError("remote_result_requires_review")
         store.finish(job["id"], "submitted_unconfirmed", receipt["evidence"])
-        return True
     except Exception:
         store.finish(job["id"], "review_required", {"error": "remote_result_unknown", "no_retry": True})
         store.pause("remote_result_unknown")
         raise
+    # 回执已持久记录；本地清理失败也不能改写成未知发送或重试。
+    for role in assets(job):
+        asset_path(store.root, job["id"], role).unlink()
+    if assets(job):
+        asset_path(store.root, job["id"], "media").parent.rmdir()
+    return True
 
 
 def notify_pause(store):
@@ -373,6 +509,7 @@ def run(cfg, store, config_path):
                 resolve_media(store, policy, decoder)
                 if dispatch_once(store, policy, transport):
                     print(canonical({"event": "submitted_unconfirmed", "delivery_confirmed": False}), flush=True)
+                    continue
             except Exception as exc:
                 store.pause("relay_error_" + type(exc).__name__)
                 print(canonical({"event": "paused", "error_type": type(exc).__name__, "no_retry": True}), flush=True)

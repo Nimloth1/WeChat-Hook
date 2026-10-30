@@ -7,11 +7,12 @@ constexpr std::uint64_t native_state_destroy_rva = 0x1678000;
 struct RequestLease {
     LockedImage image;
     LockedImage thumbnail;
+    std::size_t parameter_budget;
     RetentionBudget::Reservation reservation;
     std::shared_ptr<NativeModuleReference> module;
     std::atomic<bool> quarantined{false};
-    RequestLease(LockedImage&& value, RetentionBudget& budget,std::shared_ptr<NativeModuleReference> reference={},LockedImage&& preview=LockedImage{})
-        : image(std::move(value)),thumbnail(std::move(preview)),reservation(budget.Reserve(128*1024,
+    RequestLease(LockedImage&& value, RetentionBudget& budget,std::shared_ptr<NativeModuleReference> reference={},LockedImage&& preview=LockedImage{},std::size_t text_bytes=0)
+        : image(std::move(value)),thumbnail(std::move(preview)),parameter_budget(text_bytes+8192 > 128*1024 ? text_bytes+8192 : 128*1024),reservation(budget.Reserve(parameter_budget,
               image.parents.size() + (image.file != INVALID_HANDLE_VALUE ? 1 : 0)
               + thumbnail.parents.size() + (thumbnail.file != INVALID_HANDLE_VALUE ? 1 : 0))),module(std::move(reference)) {}
     void Quarantine() noexcept {
@@ -202,7 +203,7 @@ struct NativePrepared : PreparedCall {
     std::string uuid;
     NativePrepared(const Request& value,std::uint64_t module,const Addresses& addresses,LockedImage&& image,
         RetentionBudget& budget=NativeRetentionBudget(),std::shared_ptr<NativeModuleReference> reference={},LockedImage&& thumbnail=LockedImage{})
-        : request(value),base(module),address(addresses),lease(std::make_shared<RequestLease>(std::move(image),budget,std::move(reference),std::move(thumbnail))),
+        : request(value),base(module),address(addresses),lease(std::make_shared<RequestLease>(std::move(image),budget,std::move(reference),std::move(thumbnail),value.kind == "text" ? value.value.size()+40 : 0)),
           uuid(value.kind == "file" || value.kind == "image" ? Guid() : "") {
         if (NativeOwnership().Poisoned()) throw std::runtime_error("native_ownership_fault_requires_investigation");
     }
@@ -210,7 +211,7 @@ struct NativePrepared : PreparedCall {
         if (NativeOwnership().Poisoned())
             return {202,"unconfirmed","native_ownership_fault_no_retry",true};
         NativeHeap heap(base,lease);
-        Arena arena(heap);
+        Arena arena(heap,lease->parameter_budget);
         // 到这里 Controller 已持久消耗许可；Prepare 不分配原生对象、不调用私有函数。
         std::unique_ptr<OwnershipRecord> record(new OwnershipRecord);
         record->lease=lease;

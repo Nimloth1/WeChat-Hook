@@ -64,13 +64,14 @@ class Arena {
     std::vector<void*> owned_;
     std::size_t bytes_ = 0;
     bool retain_ = false;
+    std::size_t limit_;
 public:
-    explicit Arena(Heap& heap) : heap_(heap) { owned_.reserve(32); }
+    explicit Arena(Heap& heap, std::size_t limit = 128 * 1024) : heap_(heap), limit_(limit) { owned_.reserve(32); }
     ~Arena() { if (!retain_) for (void* pointer : owned_) heap_.Free(pointer); }
     Arena(const Arena&) = delete;
     Arena& operator=(const Arena&) = delete;
     void* Allocate(std::size_t bytes) {
-        if (!bytes || bytes > 128 * 1024 - bytes_) throw std::bad_alloc();
+        if (!bytes || bytes > limit_ - bytes_) throw std::bad_alloc();
         void* pointer = heap_.Allocate(bytes);
         if (!pointer) throw std::bad_alloc();
         try { owned_.push_back(pointer); }
@@ -98,7 +99,6 @@ inline NarrowString MakeNarrow(Arena& arena, const std::string& source, bool nat
     result.capacity = 15;
     if (source.size() <= 15) std::memcpy(result.data.local, source.data(), source.size());
     else {
-        if (source.size() > 32768) throw std::invalid_argument("string_too_large");
         result.capacity = (source.size() | std::size_t(15));
         result.data.heap = static_cast<char*>(arena.AllocateString(result.capacity + 1,native));
         std::memcpy(result.data.heap, source.data(), source.size());

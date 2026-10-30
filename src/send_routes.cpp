@@ -9,7 +9,7 @@ void RegisterSendRoutes(httplib::Server& server, Controller& controller)
         if (setsockopt(socket,SOL_SOCKET,SO_EXCLUSIVEADDRUSE,
             reinterpret_cast<const char*>(&exclusive),sizeof(exclusive)) != 0) closesocket(socket);
     });
-    server.set_payload_max_length(32768);
+    server.set_payload_max_length(16 * 1024 * 1024);
     server.set_read_timeout(3,0);
     server.set_write_timeout(3,0);
     server.Get("/QueryDB/status",[&](const httplib::Request&,httplib::Response& response) {
@@ -26,7 +26,7 @@ void RegisterSendRoutes(httplib::Server& server, Controller& controller)
             {"NativeResourceReclamationImplemented",true},{"NativeOwnershipMode","native_reference_ownership"},
             {"PendingMessageOwners",retention.pending_owners},{"NativeOwnershipFault",retention.ownership_fault},
             {"DeliveryConfirmed",false},
-            {"FileSendSupported",true},{"FileSendRuntimeVerified",false},{"FileByteLimit",100ULL*1024*1024},
+            {"FileSendSupported",true},{"FileSendRuntimeVerified",false},{"FileByteLimit",nullptr},
             {"LinkCardSupported",true},{"LinkCardRuntimeVerified",false},{"LinkCardThumbnailSupported",false},
             {"NativeVideoSupported",true},{"NativeVideoRuntimeVerified",false},{"NativeVideoContainer","mp4"},
             {"NativeVoiceSupported",false},{"RuntimeCompatibilityVerified",false}};

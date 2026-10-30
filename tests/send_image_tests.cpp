@@ -145,6 +145,18 @@ int main()
             for (auto parent : retained_parents) CloseHandle(parent);
             Check(CanWrite(file) && CanWrite(first,true));
         }
+        {
+            // 超过旧20MiB边界仍流式校验同一受锁文件，不改变图片内容。
+            const auto big=temp.path/L"large.png";Write(big,bytes);
+            auto h=CreateFileW(big.c_str(),GENERIC_WRITE,0,nullptr,OPEN_EXISTING,0,nullptr);Check(h!=INVALID_HANDLE_VALUE);
+            DWORD unused=0;Check(DeviceIoControl(h,FSCTL_SET_SPARSE,nullptr,0,nullptr,0,&unused,nullptr));
+            LARGE_INTEGER size{};size.QuadPart=21LL*1024*1024;
+            Check(SetFilePointerEx(h,size,nullptr,FILE_BEGIN) && SetEndOfFile(h));CloseHandle(h);
+            auto r=Image(big,bytes);
+            h=CreateFileW(big.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr);Check(h!=INVALID_HANDLE_VALUE);
+            r.image_sha256=HashOpenFile(h,~std::uint64_t(0));CloseHandle(h);
+            auto image=OpenImage(r);Check(image.size==21ULL*1024*1024);
+        }
         Check(GetModuleHandleW(L"Weixin.dll") == nullptr);
         std::cout << "PASS send_image checks=" << checks << "; parent junction rejected, stable path and lifetime locks; no WeChat calls\n";
         return 0;

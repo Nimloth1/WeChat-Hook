@@ -1,101 +1,148 @@
 {
-  "base": "b3ecd6c34b24b4b24251ac7b96d0b5dd3918058e",
-  "scope": "Independent read-only JSONL tail + once-only VW12 executor; no DLL edits",
-  "tests": {
-    "macos": {
-      "run": 25,
-      "passed": 24,
-      "skipped": 1,
-      "interpreter": "Existing xiaomai venv"
+  "scope": "取消自行添加的发送间隔及滚动配额；取消2000字及20/100MiB业务门槛；流式附件；接入原生视频和链接卡片",
+  "deployed": false,
+  "production_configuration_changed": false,
+  "login_operated": false,
+  "VW11_accessed": false,
+  "online_test_messages": 0,
+  "python": {
+    "PM": {
+      "run": 31,
+      "passed": 29,
+      "skipped": 2
     },
-    "windows": {
-      "run": 25,
-      "passed": 25,
-      "skipped": 0
-    }
+    "PW": {
+      "run": 31,
+      "passed": 29,
+      "skipped": 2
+    },
+    "windows_powershell_binary_stdin_upload_and_fake_dispatch": "passed"
   },
-  "macos_synthetic_cycle": {
-    "synthetic_media_bytes": 20971520,
-    "seconds": 0.658,
-    "peak_rss_bytes": 275808256,
-    "cycle_process_write_bytes": 78180352,
+  "candidate": {
+    "bytes": 452096,
+    "sha256": "eabf566a4dc063267b1773ab7e72fa0a606a7a76983fca3daaceb5fd14741ecf"
+  },
+  "native_checks": {
+    "api": 147,
+    "image": 34,
+    "file": 27,
+    "link": 53,
+    "video": 35,
+    "proxy_exports": 17,
+    "proxy_concurrent_queries": 128,
+    "ownership_cases": 29,
+    "ownership_normal_checks": 32167,
+    "ownership_normal_cycles": 10000,
+    "allocations": 213221,
+    "frees": 213221,
+    "handle_delta": 0,
+    "offline_original_constructor_copy_destructor_instructions": true,
+    "real_WeChat_process_calls": 0
+  },
+  "full_windows_driver": {
+    "exit": 1,
+    "blocked_test": "send_lifetime_tests.exe",
+    "observed_failure": "CreateProcessW failure after one child passed; then executable absent",
+    "confirmed_cause": "Defender 1116/1117 quarantined offline fixture executable and temporary child as Trojan:Win32/Bearfoos.A!ml",
+    "false_positive_confirmed": false,
+    "protection_modified": false,
+    "quarantine_restored": false,
+    "status": "blocked; do not report full suite passed"
+  },
+  "streaming_measurement": {
+    "synthetic_media_bytes": 134217728,
+    "seconds": 0.43,
+    "peak_rss_bytes": 35930112,
+    "cycle_process_write_bytes": 269258752,
     "idle_100_process_write_bytes": 0,
     "post_attempts_fake_only": 1,
     "actual_wechat_calls": 0,
     "temporary_test_data_cleaned_on_exit": true
   },
-  "windows_synthetic_cycle": {
-    "synthetic_media_bytes": 20971520,
-    "seconds": 2.079,
-    "peak_rss_bytes": 195129344,
-    "cycle_process_write_bytes": 189861054,
-    "idle_100_process_write_bytes": 0,
-    "post_attempts_fake_only": 1,
-    "actual_wechat_calls": 0,
-    "temporary_test_data_cleaned_on_exit": true
-  },
-  "limits": {
-    "per_media_bytes": 20971520,
-    "pending_payload_bytes": 104857600,
-    "database_bytes": 209715200,
-    "minimum_free_bytes": 1073741824,
-    "example_interval_seconds": 180,
-    "example_daily_messages": 120,
-    "example_daily_media_bytes": 67108864
-  },
-  "production": {
-    "enabled": false,
-    "new_watermark_created": false,
-    "wechat_send_attempts": 0,
-    "login_changed": false,
-    "VW11_accessed": false,
-    "xiaomai_source_or_config_changed": false,
-    "actual_cycle_measured": false,
-    "files_installed": true,
-    "installed_source_commit": "b4f034466857478e3724421613b83bcd09485e2d",
-    "candidate_deployed": false,
-    "ready_for_use": false,
-    "health_rpc_verified": false,
-    "health_failure": "ModuleNotFoundError: relay_common at installed entry startup"
-  },
-  "files": {
-    "tools/relay_common.py": "4266d136c61f798d37193e63c2dc871465a1ff0c506a5d2d7d832171eb692c97",
-    "tools/relay_guest.py": "d83686b7287e7f207ba1190bdfc56ce82f16d7cc5aae99458e79fe60057d13f9",
-    "tools/relay_pm.py": "b3c202bf176d8bcff56a27f4bdb05e9c351798de5148e50a8bb06282c4abdb14",
-    "tests/test_pm_relay.py": "fdf8efbfc1aa12488d25b72baefbba1cef1b4fcc539882ac3e803d0d65a5ac21",
-    "tests/measure_pm_relay.py": "6e59c2b95b7db16d72103e37f47125e7af5760e424c16d6fe11e31b9692cd2c1"
-  },
-  "verified_utc": "2026-10-30T05:19:13.580482+00:00",
-  "review_fixes": {
-    "reviewed_head": "5a1222bb4c71a9618354837beeb21752ceb0fc10",
-    "rate_jitter": "Persist local completion in terminal transaction; PM completion follows guest receipt; interval and rolling count/byte quotas use completion. Not-ready jobs remain local ready with no remote call.",
-    "media_starvation": "At most 10 waiting rows per call, rowid keyset plus wrap; in-memory cursor, no polling writes.",
-    "regressions": [
-      "variable startup/receipt delay and restart",
-      "rolling daily message/byte boundary",
-      "25 waiting rows, ready positions 11 and 25",
-      "new file and cursor reset after restart",
-      "waiting polls leave database content and mtime unchanged"
-    ],
-    "real_wechat_calls": 0,
-    "DLL_changed": false
-  },
-  "synthetic_cycle_measured_source_commit": "b4f034466857478e3724421613b83bcd09485e2d",
-  "embedded_startup_fix": {
-    "base": "ef4a3564c6db93dc93aeeabb1acfce2a74416566",
-    "change": "Prepend resolved entry directory before importing relay_common; shared runtime and ._pth unchanged",
-    "macos_before_patch_isolated_failed": true,
-    "windows_before_patch_embedded_failed": true,
-    "windows_runtime_version": "3.13.17",
-    "runtime_files_hash_verified": 31,
-    "runtime_stdlib_sqlite": "3.50.4",
-    "isolated_pth": [
-      "python313.zip",
-      "."
-    ],
-    "regression": "Normal and embedded interpreter: -I -B entry --help from unrelated cwd with hostile same-name module and PYTHONPATH; non-ASCII/spaced entry directory",
-    "actual_rpc_tested": false,
+  "existing_source_video_offline": {
+    "existing_scope_video_found": true,
+    "network_calls": 0,
     "wechat_calls": 0,
-    "temporary_runtime_copies_removed": true
+    "sent": 0,
+    "bytes": 8664386,
+    "duration_seconds": 59,
+    "thumbnail_bytes": 32162
+  },
+  "retained_operational_bounds": {
+    "control_frame_bytes": 16777216,
+    "jsonl_line_bytes": 1048576,
+    "native_retained_parameter_bytes": 16777216,
+    "disk_free_reserve_bytes": 1073741824,
+    "native_parameter_handle_count": 256,
+    "upload_timeout_seconds": 900,
+    "dispatch_timeout_seconds": 90,
+    "media_child_sampled_rss_stop_bytes": 536870912
+  },
+  "age_rule": "unchanged; queued messages or waiting media older than 24h pause chain; not-yet-queued old events skipped",
+  "migration": "stop services, same scope, drain pending, preserve cursor/activated_at/history/markers; no rebaseline",
+  "production_full_cycle_write_measurement": "not performed; candidate not deployed",
+  "native_sample_removed_after_tests": true,
+  "source_sha256": {
+    "tools/relay_common.py": "9402da8daa7700e20b9707f5902b49f6f18d81198a38c174121cafce60030f33",
+    "tools/relay_assets.py": "94fef18a84ecb1b94d46550b57305f7bb8bf1dd4f29e1f9521de2734d7b19ceb",
+    "tools/relay_guest.py": "8343c0766e4e3fba318984a48d6cceb0fd23eac9e5afe3f3e3f7112675a0642e",
+    "tools/relay_pm.py": "96d81e0611630bfcf4a7d36efa5cd8cb542146bc9bf009f37fb03893bc0053fa",
+    "tools/relay_upgrade.py": "0b21dc608a875bdb39a886faad195ff15c8c49dbb4d437dcd149b35de23e7cef",
+    "include/send_layout.h": "4ea8cf5d648d747280b0209d8fb2b5833054005800a763727b4e5b04cee1cf29",
+    "src/send_api.cpp": "bf85047b6adf5cf337b986cb1a3dfa6e8657ef91f4b1b9b8f2023cb40092abf3",
+    "src/send_native.cpp": "3df878c73a7da76403a848827389f4ec0d1574276730981a958481307d4709ae",
+    "src/send_ownership.inc": "f8f49b8c02f53128981a1f91b0bda2972fb9165dca8a2a1fc7b9cc853e0678ad",
+    "src/send_routes.cpp": "9be467ec2ca34fc46b7724ac555d083d28ec1cb230621c660356c78183ef5226"
+  },
+  "approval_contract_fix": {
+    "root_cause": "v2 producer generated nonzero expires_utc, real ApprovalLifetimeValid requires 0; baseline and five message kinds affected",
+    "fix": "executor expires_utc=0; no DLL implementation change",
+    "generation_control": "pre-fix actual C++ integration failed; corrected generation passes; nonzero mutation remains rejected for all five kinds before POST with both ledgers paused",
+    "PM": {
+      "regular_tests_run": 31,
+      "regular_passed": 29,
+      "regular_skipped": 2,
+      "contract_tests_run": 2,
+      "contract_tests_passed": 2,
+      "sanitizers": "ASan/UBSan; non-recovering; any probe stderr fails"
+    },
+    "PW": {
+      "regular_tests_run": 31,
+      "regular_passed": 29,
+      "regular_skipped": 2,
+      "contract_tests_run": 2,
+      "contract_tests_passed": 2,
+      "real_WinAPI_and_bcrypt": true,
+      "ExitCode": 0,
+      "ElapsedSeconds": 28.8,
+      "SampledPeakTreeBytes": 255893504,
+      "NoWeChatProcessAccess": true,
+      "NoGuestAccess": true,
+      "NoDLLBuilt": true
+    },
+    "contract_scenarios": {
+      "correct_zero_all_five": 5,
+      "nonzero_rejected_before_POST_all_five": 5,
+      "modified_target_payload_request_id_token_rejected_without_consumption": 4,
+      "consumed_approval_restored_same_path_rejected": 5
+    },
+    "DLL_implementation_changed": false,
+    "DLL_built": false,
+    "deployed": false,
+    "real_test_messages": 0,
+    "guest_accessed": false,
+    "login_operated": false,
+    "prior_Defender_full_build_block": "unchanged; not restored or bypassed; full Windows driver not rerun",
+    "source_sha256": {
+      "tools/relay_guest.py": "8343c0766e4e3fba318984a48d6cceb0fd23eac9e5afe3f3e3f7112675a0642e",
+      "src/send_api.cpp": "bf85047b6adf5cf337b986cb1a3dfa6e8657ef91f4b1b9b8f2023cb40092abf3",
+      "src/send_approval.cpp": "c62e35780e0d8a339e528864815e75bd081ea90a57c1170d59c60d7b70e81f58",
+      "tests/test_pm_relay.py": "43b120a51473962c76f7e0c20ec20c4b398b1d9f14846afa526596229e054901",
+      "tests/relay_approval_contract.cpp": "4f459689e1bc0103d7ed8aec49daad9901b804d52ab2724043cf57248bbe54c5",
+      "tests/test_relay_approval_contract.py": "c52a96f547bb4941524d30e08dea92538c89abd39babfe72ce833b4f49fe71d2",
+      "tests/approval_contract_stubs/windows.h": "44a7a21bebcea09ad222d4813f4e154721d81ee9aa8c54312b9b88d1a73a76ab",
+      "tests/approval_contract_stubs/bcrypt.h": "fc6801f8464108363cd4678b97c99624599249b452de4eb2ec9490ad0694ed56",
+      "build/test-relay-approval.ps1": "6ecc78d59efda3fc071afb443f2ca88f4b7d5ab2289723774d60a365f85dd4f3"
+    }
   }
 }

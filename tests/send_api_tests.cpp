@@ -80,6 +80,8 @@ int main()
 {
     try {
         Check(GetModuleHandleW(L"Weixin.dll") == nullptr);
+        Check(ParseRequest("text",Body(std::string(2001,'x'))).value.size()==2001);
+        Check(ParseRequest("text",Body(std::string(40000,'x'))).value.size()==40000);
         Check(Sha256("abc",3) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
         const std::string auth = "Bearer "+fixture_token;
         {
@@ -93,7 +95,7 @@ int main()
             for (const auto& input : {"{}","[]","null","{",R"({"request_id":"offline-request-0001","wxidorgid":"wxid_offline_fixture","msg":123})",
                 R"({"request_id":"offline-request-0001","wxidorgid":"wxid_offline_fixture","msg":"x","extra":true})"})
                 Check(c.Dispatch(auth,"text",input).http == 400);
-            for (const auto& bad : {std::string(""),std::string(" \n\t"),std::string("a\0b",3),std::string(2001,'x')})
+            for (const auto& bad : {std::string(""),std::string(" \n\t"),std::string("a\0b",3)})
                 Check(c.Dispatch(auth,"text",Body(bad)).http == 400);
             Check(c.Dispatch("Bearer incorrect","text",Body()).http == 403);
             Check(c.Dispatch(auth,"text",Body("different content")).http == 403);
@@ -362,7 +364,7 @@ int main()
             auto invalid = client.Post("/SendTextMsg",headers,"{}","application/json");
             auto sent = client.Post("/SendTextMsg",headers,Body(),"application/json");
             auto duplicate = client.Post("/SendTextMsg",headers,Body(),"application/json");
-            auto oversized = client.Post("/SendTextMsg",headers,std::string(32769,'x'),"application/json");
+            auto oversized = client.Post("/SendTextMsg",headers,std::string(16*1024*1024+1,'x'),"application/json");
             server.stop(); listener.join(); collision.stop();
             Check(status && status->status == 200 && json::parse(status->body)["IsLogin"].is_null());
             Check(request && request->status == 403);

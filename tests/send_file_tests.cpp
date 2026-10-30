@@ -70,7 +70,11 @@ int main() {
         DWORD unused=0;Check(DeviceIoControl(h,FSCTL_SET_SPARSE,nullptr,0,nullptr,0,&unused,nullptr));
         LARGE_INTEGER length{};length.QuadPart=100LL*1024*1024+1;
         Check(SetFilePointerEx(h,length,nullptr,FILE_BEGIN) && SetEndOfFile(h));CloseHandle(h);
-        Check(Reject(File(pdf,bytes)));Write(pdf,bytes);
+        auto big=File(pdf,bytes);
+        h=CreateFileW(pdf.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr);Check(h!=INVALID_HANDLE_VALUE);
+        big.file_sha256=HashOpenFile(h,~std::uint64_t(0));CloseHandle(h);
+        {auto allowed=OpenFile(big);Check(allowed.size==100ULL*1024*1024+1);}
+        Write(pdf,bytes);
         Check(GetModuleHandleW(L"Weixin.dll")==nullptr);
         fs::remove_all(temp);
         std::cout<<"PASS send_file checks="<<checks<<"; exact hash, arbitrary bytes, ancestors locked, no native calls\n";return 0;

@@ -1,8 +1,9 @@
-"""20MiB 合成附件完整周期的内存/磁盘写入测量，不连接微信或网络。"""
+"""128MiB 合成附件完整周期的内存/磁盘写入测量，不连接微信或网络。"""
 import base64
 import gc
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -10,6 +11,8 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_pm_relay import FakeHook, event, policy
+from relay_assets import snapshot
+from relay_common import asset_path
 from relay_common import Store, make_job
 from relay_guest import Executor
 from relay_pm import dispatch_once
@@ -57,7 +60,7 @@ def counters():
 
 
 def main():
-    with tempfile.TemporaryDirectory() as folder:
+    with tempfile.TemporaryDirectory(dir=os.environ.get("RELAY_TEST_TMP")) as folder:
         root = Path(folder)
         before = counters()
         started = time.monotonic()
@@ -65,15 +68,20 @@ def main():
         permit = root / "permit.json"
         hook = FakeHook(permit)
         executor = Executor(guest, policy(), permit, hook)
-        data = b"synthetic-data--" * (20 * 1024 * 1024 // 16)
-        assert len(data) == 20 * 1024 * 1024
-        job = make_job(event(), policy(), "file", {"filename": "synthetic.bin",
-            "sha256": hashlib.sha256(data).hexdigest(), "data_b64": base64.b64encode(data).decode()})
-        del data
+        size = 128 * 1024 * 1024
+        source = root / "synthetic.bin"
+        with source.open("wb") as f:
+            f.truncate(size)
+        job = make_job(event(), policy(), "file", {
+            "filename": "synthetic.bin", "size": size, "sha256": "a" * 64})
+        meta = snapshot(source, asset_path(pm.root, job["id"], "media"), "synthetic.bin", size)
+        job = make_job(event(), policy(), "file", meta)
         pm.accept(job)
         class LocalTransport:
             def request(self, request):
-                # 用真实 JSON 序列化/解析覆盖 SSH 数据复制的主要内存成本。
+                # 真正走流式上传实现；文件不进入 JSON。替身只替换网络和微信。
+                with asset_path(pm.root, job["id"], "media").open("rb") as f:
+                    executor.upload(job, "media", f)
                 return json.loads(json.dumps(executor.dispatch(json.loads(json.dumps(request))["job"])))
         assert dispatch_once(pm, policy(), LocalTransport())
         assert len(hook.posts) == 1
@@ -87,7 +95,7 @@ def main():
             pm.status()
             guest.status()
         after_idle = counters()
-        result = {"synthetic_media_bytes": 20 * 1024 * 1024,
+        result = {"synthetic_media_bytes": size,
                   "seconds": round(time.monotonic() - started, 3),
                   "peak_rss_bytes": after_idle["peak_rss_bytes"],
                   "cycle_process_write_bytes": after_cycle["write_bytes"] - before["write_bytes"],

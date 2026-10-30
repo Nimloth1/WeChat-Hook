@@ -1,5 +1,4 @@
 """PM → VW12 自动转发的离线协议和持久账本；不包含微信调用。"""
-import base64
 from contextlib import contextmanager
 import hashlib
 import json
@@ -10,17 +9,16 @@ import shutil
 import sqlite3
 import time
 
-MAX_MEDIA = 20 * 1024 * 1024
 MAX_PENDING = 100 * 1024 * 1024
 MIN_FREE = 1024 * 1024 * 1024
-MAX_WIRE = 29 * 1024 * 1024
-KINDS = {"text", "image", "file"}
+MAX_WIRE = 16 * 1024 * 1024  # 控制帧内存预算；附件不再进入 JSON/base64。
+KINDS = {"text", "image", "file", "video", "link"}
 SOURCE_MODULE = "f487e4f56930456a25fb0d7b058c77e2dcd364e268d49bdfff4dc0e3be26ba36"
-HOOK_MODULE = "2b88a8d697b9a7a52fd0b5e1d60c7e1477970e96d918d2b4e5f9a779a55e8171"
+HOOK_MODULE = "eabf566a4dc063267b1773ab7e72fa0a606a7a76983fca3daaceb5fd14741ecf"
 
 
 def canonical(value):
-    # 附件 base64 很长；少量中文元数据不能让整个 JSON 变成双字节 Unicode 缓冲。
+    # 控制协议固定ASCII JSON；原生许可另用既有UTF-8摘要格式。
     return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
 
 
@@ -42,8 +40,61 @@ def file_hash(path):
     return h.hexdigest()
 
 
+def validate_asset(payload):
+    if not isinstance(payload, dict) or set(payload) != {"filename", "sha256", "size"}:
+        raise ValueError("invalid_asset")
+    name = payload["filename"]
+    if (not isinstance(name, str) or not name or len(name) > 180
+            or re.search(r'[<>:"/\\|?*\x00-\x1f]', name)
+            or name.endswith((".", " ")) or name.split(".")[0].upper() in
+            {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
+             *(f"LPT{i}" for i in range(1, 10))}):
+        raise ValueError("invalid_filename")
+    if (type(payload["size"]) is not int or not 0 < payload["size"] < 2**63
+            or not re.fullmatch(r"[0-9a-f]{64}", str(payload["sha256"]))):
+        raise ValueError("invalid_asset_metadata")
+    return payload
+
+
+def assets(job):
+    if job["kind"] in {"text", "link"}:
+        return {}
+    if job["kind"] == "video":
+        return {key: job["payload"][key] for key in ("media", "thumbnail")}
+    return {"media": job["payload"]}
+
+
+def asset_path(root, job_id, role):
+    if not re.fullmatch(r"[0-9a-f]{64}", job_id) or role not in {"media", "thumbnail"}:
+        raise ValueError("invalid_asset_key")
+    return Path(root) / "spool" / job_id / (role + ".bin")
+
+
+def validate_link(payload):
+    from urllib.parse import urlsplit
+    if not isinstance(payload, dict) or set(payload) != {"title", "description", "url"}:
+        raise ValueError("invalid_link")
+    title, description, url = (payload[k] for k in ("title", "description", "url"))
+    if (any(not isinstance(x, str) for x in (title, description, url))
+            or not title.strip() or len(title.encode("utf-16le")) // 2 > 256
+            or len(description.encode("utf-16le")) // 2 > 2000
+            or len(url.encode("utf-16le")) // 2 > 2048
+            or any((ord(c) < 32 and c not in "\t\r\n") or ord(c) == 127 for c in title + description)
+            or not url.startswith(("http://", "https://"))
+            or any(ord(c) <= 32 or ord(c) == 127 or c == "\\" for c in url)):
+        raise ValueError("invalid_link_fields")
+    authority = urlsplit(url).netloc
+    if not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]{1,5})?", authority):
+        raise ValueError("invalid_link_url")
+    host, _, port = authority.partition(":")
+    if host.startswith(".") or host.endswith(".") or ".." in host or port and not 1 <= int(port) <= 65535:
+        raise ValueError("invalid_link_url")
+    return payload
+
+
 def validate_policy(policy):
-    if (not isinstance(policy, dict) or policy.get("version") != 1
+    if (not isinstance(policy, dict) or policy.get("version") != 2
+            or set(policy) != {"version", "enabled", "recipient", "source", "corporations"}
             or type(policy.get("enabled")) is not bool):
         raise ValueError("invalid_policy")
     for key in ("recipient", "source"):
@@ -54,11 +105,6 @@ def validate_policy(policy):
     if (not isinstance(policy.get("corporations"), list) or not policy["corporations"]
             or any(not isinstance(x, str) or not x for x in policy["corporations"])):
         raise ValueError("missing_corporation_allowlist")
-    for key, low, high in (("interval_seconds", 180, 86400),
-                           ("daily_messages", 1, 480),
-                           ("daily_media_bytes", 1, 128 * 1024 * 1024)):
-        if type(policy.get(key)) is not int or not low <= policy[key] <= high:
-            raise ValueError("invalid_rate_policy")
     return policy
 
 
@@ -80,25 +126,22 @@ def validate_job(job, policy):
     if job["kind"] == "text":
         if (not isinstance(payload, dict) or set(payload) != {"text"}
                 or not isinstance(payload["text"], str) or "\x00" in payload["text"]
-                or not payload["text"].strip()
-                or len(payload["text"].encode("utf-16le")) // 2 > 2000):
+                or not payload["text"].strip()):
             raise ValueError("invalid_text")
+    elif job["kind"] == "link":
+        validate_link(payload)
+    elif job["kind"] == "video":
+        if (not isinstance(payload, dict) or set(payload) != {"media", "thumbnail", "duration_seconds"}
+                or type(payload["duration_seconds"]) is not int
+                or not 1 <= payload["duration_seconds"] <= 86400):
+            raise ValueError("invalid_video")
+        validate_asset(payload["media"])
+        validate_asset(payload["thumbnail"])
+        if (not payload["media"]["filename"].endswith(".mp4")
+                or not payload["thumbnail"]["filename"].endswith(".jpg")):
+            raise ValueError("invalid_video_format")
     else:
-        if not isinstance(payload, dict) or set(payload) != {"filename", "sha256", "data_b64"}:
-            raise ValueError("invalid_media")
-        name = payload["filename"]
-        if (not isinstance(name, str) or not name or len(name) > 180
-                or re.search(r'[<>:"/\\|?*\x00-\x1f]', name)
-                or name.endswith((".", " ")) or name.split(".")[0].upper() in
-                {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
-                 *(f"LPT{i}" for i in range(1, 10))}):
-            raise ValueError("invalid_filename")
-        raw = payload["data_b64"]
-        if not isinstance(raw, str) or len(raw) > (MAX_MEDIA + 2) // 3 * 4:
-            raise ValueError("media_too_large")
-        data = base64.b64decode(raw, validate=True)
-        if not data or len(data) > MAX_MEDIA or hashlib.sha256(data).hexdigest() != payload["sha256"]:
-            raise ValueError("media_hash_mismatch")
+        validate_asset(payload)
     return job
 
 
@@ -175,8 +218,7 @@ class Store:
             raise ValueError("queue_capacity")
         if shutil.disk_usage(self.root).free < MIN_FREE + len(payload.encode()) * 3:
             raise ValueError("disk_reserve")
-        encoded = job["payload"].get("data_b64", "")
-        media = len(encoded) // 4 * 3 - (len(encoded) - len(encoded.rstrip("=")))
+        media = sum(x["size"] for x in assets(job).values())
         metadata = {k: job[k] for k in ("id", "recipient", "source", "message_id", "source_ts", "kind")}
         db.execute("INSERT INTO jobs(id,digest,state,evidence,created,media_bytes) "
                    "VALUES(?,?,?,?,?,?)", (job["id"], fingerprint, state, canonical(metadata), time.time(), media))
@@ -204,17 +246,6 @@ class Store:
                 return False
             if db.execute("SELECT 1 FROM jobs WHERE state IN ('dispatching','review_required') LIMIT 1").fetchone():
                 raise ValueError("unresolved_attempt")
-            # PM 完成时已收到来宾完成回执，以完成时刻限流，涵盖远端准备/清理耗时。
-            # 两端均使用自己的完成时间；不把不同主机的绝对时间互相比较。
-            last = db.execute("SELECT max(coalesce(completed,attempt)) FROM jobs").fetchone()[0]
-            # 滚动配额同样保守地从完成计时，防止 PM 先释放旧任务的额度。
-            count, size = db.execute("SELECT count(*),coalesce(sum(media_bytes),0) FROM jobs "
-                                     "WHERE coalesce(completed,attempt)>?", (now - 86400,)).fetchone()
-            encoded = job["payload"].get("data_b64", "")
-            media = len(encoded) // 4 * 3 - (len(encoded) - len(encoded.rstrip("=")))
-            if ((last is not None and now - last < policy["interval_seconds"])
-                    or count >= policy["daily_messages"] or size + media > policy["daily_media_bytes"]):
-                return False
             return db.execute("UPDATE jobs SET state='dispatching',attempt=? WHERE id=? AND state='ready'",
                               (now, job["id"])).rowcount == 1
 

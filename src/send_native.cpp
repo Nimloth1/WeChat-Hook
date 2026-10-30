@@ -248,10 +248,10 @@ LockedImage OpenPayload(const Request& request, bool attachment)
         FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
     CheckImagePathHandle(image.file,stable,false);
     LARGE_INTEGER length{};
-    if (!GetFileSizeEx(image.file,&length) || length.QuadPart <= 0 || length.QuadPart > (attachment ? 100LL : 20LL)*1024*1024)
+    if (!GetFileSizeEx(image.file,&length) || length.QuadPart <= 0)
         throw std::runtime_error("image_file_invalid");
     if (attachment) {
-        if (HashOpenFile(image.file,100ULL*1024*1024) != request.file_sha256)
+        if (HashOpenFile(image.file,~std::uint64_t(0)) != request.file_sha256)
             throw std::runtime_error("attachment_hash_mismatch");
         image.size = static_cast<std::uint64_t>(length.QuadPart);
         return image;
@@ -261,7 +261,7 @@ LockedImage OpenPayload(const Request& request, bool attachment)
     const unsigned char png[8] = {137,80,78,71,13,10,26,10};
     if (!(read == 8 && std::memcmp(head,png,8) == 0) && !(head[0] == 255 && head[1] == 216 && head[2] == 255)
         && !(head[0] == 'B' && head[1] == 'M')) throw std::runtime_error("image_format_unsupported");
-    if (HashOpenFile(image.file,20*1024*1024) != request.image_sha256) throw std::runtime_error("image_hash_mismatch");
+    if (HashOpenFile(image.file,~std::uint64_t(0)) != request.image_sha256) throw std::runtime_error("image_hash_mismatch");
     image.size = static_cast<std::uint64_t>(length.QuadPart);
     return image;
 }
