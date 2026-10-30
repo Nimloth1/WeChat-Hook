@@ -415,6 +415,34 @@ int main()
             Check(replay && replay->status==423 && backend.run==1 && consumed==1);
             Check(!LoadApproval(permit.wstring()).enabled);
         }
+        for(const auto& kind : {std::string("link"),std::string("video")}) {
+            const auto body=kind=="link" ? json{{"request_id","offline-http-link-0001"},{"wxidorgid","12345678901@chatroom"},
+                {"title",u8"离线卡片"},{"description","no real message"},{"url","https://example.com/a?b=1&c=2"}}
+                : json{{"request_id","offline-http-video-0001"},{"wxidorgid","12345678901@chatroom"},
+                    {"path",R"(C:\fixture\video.mp4)"},{"file_sha256",std::string(64,'a')},
+                    {"thumbnail_path",R"(C:\fixture\cover.jpg)"},{"thumbnail_sha256",std::string(64,'b')},{"duration_seconds",2}};
+            auto a=GroupPermit(body.dump(),kind);
+            const auto path=temp.path/std::filesystem::path(kind+"-approval.json");
+            Write(path,PermitJson(a).dump());Check(LoadApproval(path.wstring()).enabled);
+            FakeBackend backend;int consumed=0;
+            Controller c([&]{return LoadApproval(path.wstring());},backend,[&](const Approval& p){
+                ++consumed;return ConsumeApproval(path.wstring(),p);});
+            httplib::Server server;RegisterSendRoutes(server,c);
+            const auto port=server.bind_to_any_port("127.0.0.1");Check(port>0);
+            std::thread thread([&]{server.listen_after_bind();});server.wait_until_ready();
+            httplib::Client client("127.0.0.1",port);client.set_read_timeout(3,0);
+            const auto route=kind=="link"?"/send_link_msg":"/send_video_msg";
+            const auto no_auth=client.Post(route,body.dump(),"application/json");
+            const auto result=client.Post(route,httplib::Headers{{"Authorization",auth}},body.dump(),"application/json");
+            const auto replay=client.Post(route,httplib::Headers{{"Authorization",auth}},body.dump(),"application/json");
+            server.stop();thread.join();
+            Check(no_auth && no_auth->status==403);
+            Check(result && result->status==202 && json::parse(result->body)["DeliveryConfirmed"]==false);
+            Check(replay && replay->status==423 && consumed==1 && backend.run==1);
+            Check(!LoadApproval(path.wstring()).enabled);
+            Controller restarted([&]{return LoadApproval(path.wstring());},backend,[&](const Approval& p){return ConsumeApproval(path.wstring(),p);});
+            Check(restarted.Dispatch(auth,kind,body.dump()).http==423 && backend.run==1);
+        }
         Check(GetModuleHandleW(L"Weixin.dll") == nullptr);
         std::cout << "PASS send_api checks=" << checks << "; fake backend only; no WeChat private function called\n";
         return 0;

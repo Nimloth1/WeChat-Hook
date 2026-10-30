@@ -141,7 +141,7 @@ struct NativeFixture {
         Patch(0x426b0,reinterpret_cast<void*>(&SessionGet));Patch(0x2bbcb0,reinterpret_cast<void*>(&Queue));
         for(auto r:{0x1678320,0x16bed80,0x16bd660,0x6860478}) Patch(r,reinterpret_cast<void*>(&Forbidden));
         // 生产加载器已提交这些只读表；夹具惰性映射也须在边界检查前提交。
-        for(auto r:{0x8279358,0x84f96b8,0x84f9748,0x84f9a78,0x8279578}) {volatile auto value=*At(r-8);(void)value;}
+        for(auto r:{0x8279358,0x84f96b8,0x84f9748,0x84f9a78,0x8279578,0x878be68,0x878bda8,0x84f97f8,0x84f9888}) {volatile auto value=*At(r-8);(void)value;}
     }
     ~NativeFixture() {
         // 先前建立的原生控制块必须都完成析构/回收；失败用例在独立进程结束。
@@ -153,7 +153,7 @@ struct NativeFixture {
     }
     send_fix::Addresses Addresses() const {
         return {base+0x8279358,base+0x84f96b8,base+0x84f9748,base+0x84ec9c8,
-            {base+0x8595f58,base+0x8595e98,base+0x8595dd8},1,base+0x84f9a78,base+0x8279578};
+            {base+0x8595f58,base+0x8595e98,base+0x8595dd8},1,base+0x84f9a78,base+0x8279578,base+0x878be68,base+0x878bda8,base+0x84f97f8,base+0x84f9888};
     }
     std::uint64_t TakeTask() { if(queue.empty()) throw std::runtime_error("no_synthetic_task");auto t=queue.back();queue.pop_back();return t; }
     std::uint64_t CopyTask(std::uint64_t t) { return reinterpret_cast<std::uint64_t(__fastcall*)(std::uint64_t)>(base+0x1678180)(t); }

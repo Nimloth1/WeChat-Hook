@@ -13,6 +13,9 @@ struct Request {
     std::string kind, id, recipient, value, image_sha256;
     std::u16string unicode;
     std::string file_sha256;
+    std::string title, description; // link: value 是 URL，所有字段共同绑定逐条许可。
+    std::string thumbnail_path, thumbnail_sha256;
+    std::uint32_t duration_seconds = 0;
 };
 struct Result {
     int http = 423;

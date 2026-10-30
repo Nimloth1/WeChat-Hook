@@ -1,5 +1,7 @@
 #include "send_native.h"
 #include "send_context.h"
+#include "send_link.h"
+#include "send_video.h"
 #include "global.h"
 #include <bcrypt.h>
 #include <objbase.h>
@@ -121,12 +123,13 @@ std::uint64_t Module(const Approval& approval,HMODULE module)
         throw std::runtime_error("module_architecture_failed");
     for (auto relative : {offset::create_param2,static_cast<std::uint64_t>(offset::txt_message_ctr),offset::send_message,
         std::uint64_t(0x680d0fc),std::uint64_t(0x680d138),std::uint64_t(0x1678000),
-        std::uint64_t(0x6b2d30)})
+        std::uint64_t(0x6b2d30),std::uint64_t(0x2b52b90),std::uint64_t(0x18efd70)})
         if (relative >= nt->OptionalHeader.SizeOfImage || !MemoryRange(base+relative,16,true))
             throw std::runtime_error("function_address_not_executable");
     for (auto relative : {offset::param1_vtable,offset::param2,offset::param2_1,offset::param2_2,offset::param2_3,
                           static_cast<std::uint64_t>(offset::txt_message_vtbl),offset::img_msg_vtbl,offset::img_msg_vtb2,
-                          std::uint64_t(0x84f9a78),std::uint64_t(0x8279578)})
+                          std::uint64_t(0x84f9a78),std::uint64_t(0x8279578),
+                          std::uint64_t(0x878be68),std::uint64_t(0x878bda8),std::uint64_t(0x84f97f8),std::uint64_t(0x84f9888)})
         if (relative >= nt->OptionalHeader.SizeOfImage || !MemoryRange(base+relative,8,false))
             throw std::runtime_error("data_address_not_readable");
     return base;
@@ -278,6 +281,30 @@ LockedImage OpenFile(const Request& request)
     }
 }
 
+LockedImage OpenVideo(const Request& request)
+{
+    auto file=OpenFile(request);
+    const auto dot=request.value.find_last_of('.');
+    auto extension=dot==std::string::npos ? "" : request.value.substr(dot);
+    std::transform(extension.begin(),extension.end(),extension.begin(),[](unsigned char c){return static_cast<char>(c>='A'&&c<='Z'?c+32:c);});
+    LARGE_INTEGER zero{};unsigned char header[12]{};DWORD read=0;
+    if(extension!=".mp4" || !SetFilePointerEx(file.file,zero,nullptr,FILE_BEGIN)
+        || !ReadFile(file.file,header,sizeof(header),&read,nullptr) || read!=sizeof(header)
+        || std::memcmp(header+4,"ftyp",4)!=0) throw std::runtime_error("video_format_unsupported");
+    return file;
+}
+LockedImage OpenVideoThumbnail(const Request& request)
+{
+    Request image=request;image.kind="image";image.value=request.thumbnail_path;
+    image.unicode=Utf16(image.value);image.image_sha256=request.thumbnail_sha256;
+    auto file=OpenImage(image);
+    LARGE_INTEGER zero{};unsigned char header[3]{};DWORD read=0;
+    if(!SetFilePointerEx(file.file,zero,nullptr,FILE_BEGIN)
+        || !ReadFile(file.file,header,3,&read,nullptr) || read!=3
+        || header[0]!=255 || header[1]!=216 || header[2]!=255) throw std::runtime_error("video_format_unsupported");
+    return file;
+}
+
 std::unique_ptr<PreparedCall> WindowsBackend::Prepare(const Request& request, const Approval& approval)
 {
     // 哈希校验到最后一份观察记录结束之间，保护晚到的原生析构/释放代码。
@@ -285,12 +312,15 @@ std::unique_ptr<PreparedCall> WindowsBackend::Prepare(const Request& request, co
     if (!GetModuleHandleExW(0,L"Weixin.dll",&module->value)) throw std::runtime_error("wechat_module_missing");
     const auto base = Module(approval,module->value);
     Addresses address{base+offset::txt_message_vtbl,base+offset::img_msg_vtbl,base+offset::img_msg_vtb2,
-        base+offset::param1_vtable,{base+offset::param2_1,base+offset::param2_2,base+offset::param2_3},0,base+0x84f9a78,base+0x8279578};
+        base+offset::param1_vtable,{base+offset::param2_1,base+offset::param2_2,base+offset::param2_3},0,base+0x84f9a78,base+0x8279578,
+        base+0x878be68,base+0x878bda8,base+0x84f97f8,base+0x84f9888};
     address.context = ReadSendContextValue(base+offset::param2,
         [](std::uint64_t slot,void* value,std::size_t size,std::size_t& read) {
             return ReadProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(slot),value,size,&read) != FALSE;
         });
-    auto image = request.kind == "image" ? OpenImage(request) : request.kind == "file" ? OpenFile(request) : LockedImage{};
-    return std::make_unique<NativePrepared>(request,base,address,std::move(image),NativeRetentionBudget(),std::move(module));
+    auto image = request.kind == "image" ? OpenImage(request) : request.kind == "file" ? OpenFile(request)
+        : request.kind == "video" ? OpenVideo(request) : LockedImage{};
+    auto thumbnail=request.kind=="video" ? OpenVideoThumbnail(request) : LockedImage{};
+    return std::make_unique<NativePrepared>(request,base,address,std::move(image),NativeRetentionBudget(),std::move(module),std::move(thumbnail));
 }
 } // namespace send_fix

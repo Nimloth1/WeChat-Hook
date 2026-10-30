@@ -42,7 +42,8 @@ Approval LoadApproval(const std::wstring& path)
         if (result.token.size() < 32 || result.token.size() > 128 || result.request_id.size() < 16
             || result.request_id.size() > 64 || result.recipient.empty() || result.recipient.size() > 128
             || !IsHexHash(result.payload_sha256) || !IsHexHash(result.module_sha256)
-            || (result.kind != "text" && result.kind != "image" && result.kind != "file") || !ApprovalLifetimeValid(result)) return {};
+            || (result.kind != "text" && result.kind != "image" && result.kind != "file" && result.kind != "link" && result.kind != "video")
+            || !ApprovalLifetimeValid(result)) return {};
         for (char c : result.token + result.request_id)
             if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
                 || (c >= '0' && c <= '9') || c == '-' || c == '_')) return {};
