@@ -181,7 +181,8 @@ class Executor:
         approval = {"version": 2, "enabled": True, "token": secrets.token_hex(32),
                     "request_id": job["id"], "recipient": job["recipient"], "kind": job["kind"],
                     "payload_sha256": native_fingerprint(fingerprint), "module_sha256": SOURCE_MODULE,
-                    "expires_utc": int(time.time()) + 120}
+                    # v2以逐条内容绑定和持久消耗限制一次调用；DLL契约要求无时间到期。
+                    "expires_utc": 0}
         temp = Path(str(self.permit) + ".relay-tmp-" + job["id"])
         evidence = {"post_attempts": 0, "delivery_confirmed": False}
         state = "review_required"

@@ -55,7 +55,9 @@ SSH固定VW12别名、EncodedCommand、COMPUTERNAME检查；不新增监听端�
 PM先持久claim，再依次上传本条所需素材，核对回执后唯一一次dispatch。上传用临时wire文件拼接头部和64KiB块，
 SSH从文件读取，避免管道互等以及进程内完整附件复制。每次上传独立进程，上限900秒；dispatch仍90秒。
 上传失败也不自动重传/重发；可能遗留本条暂存文件，链路停止供人工判断，不扫描清理其他任务文件。
-来宾查验全部素材摘要/长度后移入角色独立目录，再创建逐条120秒许可和持久尝试标记。
+来宾查验全部素材摘要/长度后移入角色独立目录，再创建v2逐条许可和持久尝试标记。
+许可严格遵循现有DLL的 `expires_utc=0` 契约，没有时间到期；仍只绑定本条目标、请求ID、类型、完整内容摘要和模块摘要。
+持久消耗标记保证一次调用，结束后撤销本条许可；若进程异常留下未消耗许可，它不会自动过期，须人工核查撤销，不能覆盖后继续。
 只有202、NativeEntered=true、Replayed=false、消耗标记存在才记submitted_unconfirmed，仍不等于送达。
 结束撤销本条许可，等待资源归零后清理素材。PM持久完成回执后再清理本地素材，清理失败不篡改已完成回执。
 现有DLL防重放标记、双端SQLite、未知结果暂停和不自动重试全部保留；没有任何重置/补发入口。
@@ -96,6 +98,30 @@ PM通过collector.lock排除旧运行器，Windows通过executor.lock排除来�
 该测量含两侧文件物化但以本地替身替代SSH，未包含Transport上传临时wire的额外一份写入，不能称为实际部署全链路计量。
 实际新增源附件S时，PM约2S临时写入（spool+wire）、来宾约S；视频另有JPEG。大于约1GiB/日的预计写入须上线前由用户确认，
 没有因为取消配额就自动授权无限磁盘写入。测试临时文件结束后清理，固定样本也在隔离验证完成后删除，不留完整备份。
+
+### PR11许可契约修复
+
+审核发现基线执行器误把v2许可的expires_utc设为当前时间+120，但生产DLL的ApprovalLifetimeValid只接受0，
+真实LoadApproval会返回未配置；这会导致五种消息在POST之前失败、两端持久暂停。原FakeHook仅检查文件存在，漏检了契约。
+执行器现在直接生成expires_utc=0；未修改DLL、v1生命周期、逐条绑定、ConsumeApproval或任何生产消耗标记。
+基础替身同步检查v2关键生命周期字段，完整协议由新增集成回归验证，不把Python重复实现当作真实DLL校验。
+
+```sh
+python -B tests/test_pm_relay.py
+python -B tests/test_relay_approval_contract.py
+```
+
+macOS第二条命令使用现有clang++，启用ASan/UBSan及不可恢复的sanitizer错误，临时编译并在退出时删除校验程序。
+实际链接当前生产src/send_api.cpp及src/send_approval.cpp，覆盖LoadApproval、ApprovalLifetimeValid、
+Controller::Status/Dispatch与ConsumeApproval；只适配macOS文件I/O/SHA256，不模拟Windows共享锁或ACL。
+Windows使用真实WinAPI及bcrypt，可在PW隔离源码目录执行build/test-relay-approval.ps1；
+它只编译tests/relay_approval_contract.cpp并运行2项契约测试及31项既有回归，未链接send_native.cpp、不构建DLL。
+也可设置RELAY_APPROVAL_PROBE指向显式构建的同一夹具。没有提供夹具时Windows会明确跳过该新增套件，不能当作校验通过。
+
+五种消息各验证正确值0被真实C++接受并完成一次替身调用，以及旧非零值在POST前拒绝并使两端暂停，共10个集成场景。
+另验证真实Controller拒绝更换目标/正文/请求ID/令牌且不消耗许可；已消费许可恢复到原路径仍被LoadApproval拒绝，
+重复任务只有回执而无第二次调用。五种payload摘要也经过真实Fingerprint/Controller绑定校验。
+实际发送后端仍是替身；这些结果不能证明真实微信ABI、账号状态或送达。
 
 ### 隔离验证中的阻塞（不得隐藏）
 

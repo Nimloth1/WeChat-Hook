@@ -85,7 +85,7 @@
   "source_sha256": {
     "tools/relay_common.py": "9402da8daa7700e20b9707f5902b49f6f18d81198a38c174121cafce60030f33",
     "tools/relay_assets.py": "94fef18a84ecb1b94d46550b57305f7bb8bf1dd4f29e1f9521de2734d7b19ceb",
-    "tools/relay_guest.py": "582b0c19ec8b7e921555771f9004764c6b46b8dca0cdd979ab4dc2eab6345778",
+    "tools/relay_guest.py": "8343c0766e4e3fba318984a48d6cceb0fd23eac9e5afe3f3e3f7112675a0642e",
     "tools/relay_pm.py": "96d81e0611630bfcf4a7d36efa5cd8cb542146bc9bf009f37fb03893bc0053fa",
     "tools/relay_upgrade.py": "0b21dc608a875bdb39a886faad195ff15c8c49dbb4d437dcd149b35de23e7cef",
     "include/send_layout.h": "4ea8cf5d648d747280b0209d8fb2b5833054005800a763727b4e5b04cee1cf29",
@@ -93,5 +93,56 @@
     "src/send_native.cpp": "3df878c73a7da76403a848827389f4ec0d1574276730981a958481307d4709ae",
     "src/send_ownership.inc": "f8f49b8c02f53128981a1f91b0bda2972fb9165dca8a2a1fc7b9cc853e0678ad",
     "src/send_routes.cpp": "9be467ec2ca34fc46b7724ac555d083d28ec1cb230621c660356c78183ef5226"
+  },
+  "approval_contract_fix": {
+    "root_cause": "v2 producer generated nonzero expires_utc, real ApprovalLifetimeValid requires 0; baseline and five message kinds affected",
+    "fix": "executor expires_utc=0; no DLL implementation change",
+    "generation_control": "pre-fix actual C++ integration failed; corrected generation passes; nonzero mutation remains rejected for all five kinds before POST with both ledgers paused",
+    "PM": {
+      "regular_tests_run": 31,
+      "regular_passed": 29,
+      "regular_skipped": 2,
+      "contract_tests_run": 2,
+      "contract_tests_passed": 2,
+      "sanitizers": "ASan/UBSan; non-recovering; any probe stderr fails"
+    },
+    "PW": {
+      "regular_tests_run": 31,
+      "regular_passed": 29,
+      "regular_skipped": 2,
+      "contract_tests_run": 2,
+      "contract_tests_passed": 2,
+      "real_WinAPI_and_bcrypt": true,
+      "ExitCode": 0,
+      "ElapsedSeconds": 28.8,
+      "SampledPeakTreeBytes": 255893504,
+      "NoWeChatProcessAccess": true,
+      "NoGuestAccess": true,
+      "NoDLLBuilt": true
+    },
+    "contract_scenarios": {
+      "correct_zero_all_five": 5,
+      "nonzero_rejected_before_POST_all_five": 5,
+      "modified_target_payload_request_id_token_rejected_without_consumption": 4,
+      "consumed_approval_restored_same_path_rejected": 5
+    },
+    "DLL_implementation_changed": false,
+    "DLL_built": false,
+    "deployed": false,
+    "real_test_messages": 0,
+    "guest_accessed": false,
+    "login_operated": false,
+    "prior_Defender_full_build_block": "unchanged; not restored or bypassed; full Windows driver not rerun",
+    "source_sha256": {
+      "tools/relay_guest.py": "8343c0766e4e3fba318984a48d6cceb0fd23eac9e5afe3f3e3f7112675a0642e",
+      "src/send_api.cpp": "bf85047b6adf5cf337b986cb1a3dfa6e8657ef91f4b1b9b8f2023cb40092abf3",
+      "src/send_approval.cpp": "c62e35780e0d8a339e528864815e75bd081ea90a57c1170d59c60d7b70e81f58",
+      "tests/test_pm_relay.py": "43b120a51473962c76f7e0c20ec20c4b398b1d9f14846afa526596229e054901",
+      "tests/relay_approval_contract.cpp": "4f459689e1bc0103d7ed8aec49daad9901b804d52ab2724043cf57248bbe54c5",
+      "tests/test_relay_approval_contract.py": "c52a96f547bb4941524d30e08dea92538c89abd39babfe72ce833b4f49fe71d2",
+      "tests/approval_contract_stubs/windows.h": "44a7a21bebcea09ad222d4813f4e154721d81ee9aa8c54312b9b88d1a73a76ab",
+      "tests/approval_contract_stubs/bcrypt.h": "fc6801f8464108363cd4678b97c99624599249b452de4eb2ec9490ad0694ed56",
+      "build/test-relay-approval.ps1": "6ecc78d59efda3fc071afb443f2ca88f4b7d5ab2289723774d60a365f85dd4f3"
+    }
   }
 }

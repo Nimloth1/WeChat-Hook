@@ -71,9 +71,15 @@ class FakeHook:
 
     def status(self):
         after = bool(self.posts)
+        try:
+            approval = json.loads(self.permit.read_text())
+            configured = (approval.get("version") == 2 and approval.get("enabled") is True
+                          and type(approval.get("expires_utc")) is int and approval["expires_utc"] == 0)
+        except (OSError, ValueError, AttributeError):
+            configured = False
         return {"ApprovalReload": "per_request", "ApprovalVersion2GroupOnly": True,
                 "NativeOwnershipMode": "native_reference_ownership", "NativeOwnershipFault": False,
-                "SendApprovalConfigured": self.permit.exists(), "SendInProgress": False,
+                "SendApprovalConfigured": configured, "SendInProgress": False,
                 "PendingMessageOwners": 1 if after and self.mode == "pending" else 0,
                 "RetainedParameterBytes": 0, "RetainedPayloadHandles": 0, "FileSendSupported": True}
 
