@@ -14,7 +14,7 @@ bool IsHexHash(const std::string& value)
 
 std::string Sha256(const void* data, std::size_t size)
 {
-    if (size > 1024 * 1024) throw std::invalid_argument("hash_input_too_large");
+    if (size > 16 * 1024 * 1024) throw std::invalid_argument("hash_input_too_large");
     BCRYPT_ALG_HANDLE algorithm = nullptr;
     if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
         throw std::runtime_error("sha256_unavailable");
@@ -31,7 +31,7 @@ std::string Sha256(const void* data, std::size_t size)
 
 Request ParseRequest(const std::string& kind, const std::string& body)
 {
-    if (body.size() > 32768 || (kind != "text" && kind != "image" && kind != "file" && kind != "link" && kind != "video"))
+    if (body.size() > 16 * 1024 * 1024 || (kind != "text" && kind != "image" && kind != "file" && kind != "link" && kind != "video"))
         throw std::invalid_argument("invalid_request");
     const auto value = nlohmann::json::parse(body);
     const char* payload = kind == "link" ? "url" : kind == "text" ? "msg" : "path";
@@ -74,7 +74,7 @@ Request ParseRequest(const std::string& kind, const std::string& body)
     if (!identifier(result.id, 16, 64) || !identifier(result.recipient, 1, 128))
         throw std::invalid_argument("request_id_or_recipient_id_invalid");
     result.unicode = Utf16(result.value);
-    if (result.unicode.empty() || result.unicode.size() > (kind == "text" ? 2000 : 4096))
+    if (result.unicode.empty() || (kind != "text" && result.unicode.size() > 4096))
         throw std::invalid_argument("payload_length_invalid");
     if (kind == "text" && std::all_of(result.value.begin(), result.value.end(), [](char c) {
         return c == ' ' || c == '\n' || c == '\r' || c == '\t';

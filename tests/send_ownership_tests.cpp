@@ -156,7 +156,7 @@ int wmain(int argc,wchar_t** argv) {
             auto result=c.Dispatch("Bearer "+a.token,"text",nlohmann::json{{"request_id",r.id},{"wxidorgid",r.recipient},{"msg",r.value}}.dump());
             Check(result.http==423 && f.private_entries.load()==before && f.Live()==0 && budget.Usage().bytes==0);
         }
-        for(auto size:{1,15,16,1999,2000}) {
+        for(auto size:{1,15,16,1999,2000,2001,40000,200000}) {
             NativePrepared p(Text(2,size),NativeFixture::base,f.Addresses(),LockedImage{},budget);
             const auto result=p.Run();
             if(result.error!="native_result_not_delivery_receipt")std::cerr<<"text_frame_result="<<result.error<<'\n';

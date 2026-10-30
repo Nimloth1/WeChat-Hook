@@ -53,7 +53,7 @@ struct NativeFixture {
         auto& self=*current; ++self.private_entries;
         if (self.fail_at.load() == 0) return nullptr;
         if (self.fail_at.load() > 0) --self.fail_at;
-        if (!n || n > 128*1024) RaiseException(0xe0421001,0,0,nullptr);
+        if (!n || n > 16*1024*1024) RaiseException(0xe0421001,0,0,nullptr);
         auto p=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,n);
         if (!p) RaiseException(0xe0421002,0,0,nullptr);
         std::lock_guard<std::mutex> lock(self.mutex);

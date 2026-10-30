@@ -1,20 +1,19 @@
 """一次性 VW12 原生发送执行器；仅由 SSH 调用，不驻留、不操作微信登录。"""
 import argparse
-import base64
 from contextlib import contextmanager
 import http.client
 import json
 import os
 from pathlib import Path
 import secrets
-import shutil
 import sys
 import time
 
 # 嵌入式 Python 的 ._pth 不包含脚本目录；只加入入口自身目录，不依赖 cwd/PYTHONPATH。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from relay_common import (HOOK_MODULE, MAX_WIRE, MIN_FREE, SOURCE_MODULE, Store, canonical,
+from relay_common import (HOOK_MODULE, MAX_WIRE, SOURCE_MODULE, Store, assets, asset_path, canonical,
                           digest, file_hash, native_fingerprint, validate_job, validate_policy)
+from relay_assets import receive
 
 
 @contextmanager
@@ -49,7 +48,7 @@ class Hook:
         headers = {"Connection": "close"}
         if body is not None:
             body = canonical(body).encode()
-            if len(body) > 32768:
+            if len(body) > MAX_WIRE:
                 raise ValueError("hook_body_limit")
             headers["Content-Type"] = "application/json; charset=utf-8"
         if token:
@@ -111,6 +110,17 @@ class Executor:
                 "policy_sha256": digest(self.policy), "ledger": self.store.status(),
                 "permit_present": self.permit.exists(), "hook": self.hook.status()}
 
+    def upload(self, job, role, stream):
+        validate_job(job, self.policy)
+        if (not self.policy["enabled"] or self.store.get("paused") or self.permit.exists()
+                or self.store.receipt(job["id"]) is not None or role not in assets(job)):
+            raise ValueError("upload_not_allowed")
+        if Path(str(self.permit) + ".client-attempt-" + job["id"]).exists() or Path(str(self.permit) + ".used-" + job["id"]).exists():
+            raise ValueError("prior_attempt")
+        descriptor = assets(job)[role]
+        receive(stream, asset_path(self.store.root, job["id"], role), descriptor)
+        return {"uploaded": descriptor["sha256"]}
+
     def dispatch(self, job):
         validate_job(job, self.policy)
         if not self.policy["enabled"]:
@@ -130,36 +140,44 @@ class Executor:
         if self.permit.exists() or client.exists() or used.exists():
             raise ValueError("existing_permit_or_attempt")
         assert_idle(self.hook.status())
-        asset = None
+        materialized = []
         request = {"request_id": job["id"], "wxidorgid": job["recipient"]}
         if job["kind"] == "text":
             request["msg"] = job["payload"]["text"]
             fingerprint = {"kind": "text", "recipient": job["recipient"], "value": request["msg"], "image_sha256": ""}
             endpoint = "/SendTextMsg"
+        elif job["kind"] == "link":
+            request.update(job["payload"])
+            fingerprint = {"kind": "link", "recipient": job["recipient"], **job["payload"]}
+            endpoint = "/send_link_msg"
         else:
-            data = base64.b64decode(job["payload"]["data_b64"], validate=True)
-            if shutil.disk_usage(self.store.root).free < MIN_FREE + len(data) * 6:
-                raise ValueError("guest_disk_reserve")
-            asset = self.store.root / "assets" / job["id"] / job["payload"]["filename"]
-            asset.parent.mkdir(parents=True, exist_ok=True)
-            if asset.exists():
-                raise ValueError("unresolved_asset")
-            with asset.open("xb") as f:
-                f.write(data)
-                f.flush()
-                os.fsync(f.fileno())
-            del data
-            if file_hash(asset) != job["payload"]["sha256"]:
-                raise ValueError("asset_hash_mismatch")
-            hash_field = "image_sha256" if job["kind"] == "image" else "file_sha256"
-            request.update(path=str(asset))
-            request[hash_field] = job["payload"]["sha256"]
-            fingerprint = {"kind": job["kind"], "recipient": job["recipient"],
-                           "value": str(asset), hash_field: job["payload"]["sha256"]}
-            endpoint = "/SendImgMsg" if job["kind"] == "image" else "/send_file_msg"
+            for role, descriptor in assets(job).items():
+                incoming = asset_path(self.store.root, job["id"], role)
+                if (not incoming.is_file() or incoming.stat().st_size != descriptor["size"]
+                        or file_hash(incoming) != descriptor["sha256"]):
+                    raise ValueError("staged_asset_mismatch")
+                # 独立角色目录，缩略图与视频即使同名也不能互相覆盖。
+                asset = self.store.root / "assets" / job["id"] / role / descriptor["filename"]
+                asset.parent.mkdir(parents=True, exist_ok=True)
+                if asset.exists():
+                    raise ValueError("unresolved_asset")
+                os.rename(incoming, asset)
+                materialized.append(asset)
+                if role == "media":
+                    hash_field = "image_sha256" if job["kind"] == "image" else "file_sha256"
+                    request.update(path=str(asset))
+                    request[hash_field] = descriptor["sha256"]
+                    fingerprint = {"kind": job["kind"], "recipient": job["recipient"],
+                                   "value": str(asset), hash_field: descriptor["sha256"]}
+                else:
+                    request.update(thumbnail_path=str(asset), thumbnail_sha256=descriptor["sha256"],
+                                   duration_seconds=job["payload"]["duration_seconds"])
+                    fingerprint.update(thumbnail_path=str(asset), thumbnail_sha256=descriptor["sha256"],
+                                       duration_seconds=job["payload"]["duration_seconds"])
+            endpoint = {"image": "/SendImgMsg", "file": "/send_file_msg", "video": "/send_video_msg"}[job["kind"]]
         self.store.accept(job)
         if not self.store.claim(job, self.policy):
-            raise ValueError("guest_rate_or_pause")
+            raise ValueError("guest_paused_or_unresolved")
         approval = {"version": 2, "enabled": True, "token": secrets.token_hex(32),
                     "request_id": job["id"], "recipient": job["recipient"], "kind": job["kind"],
                     "payload_sha256": native_fingerprint(fingerprint), "module_sha256": SOURCE_MODULE,
@@ -196,9 +214,12 @@ class Executor:
                     temp.unlink()
                 # 只在引用/句柄均归零且无故障时删除本条临时资产。
                 self.wait_reclaimed()
-                if asset:
+                for asset in materialized:
                     asset.unlink()
                     asset.parent.rmdir()
+                if materialized:
+                    materialized[0].parent.parent.rmdir()
+                    asset_path(self.store.root, job["id"], "media").parent.rmdir()
             except Exception as exc:
                 state = "review_required"
                 evidence["cleanup_error_type"] = type(exc).__name__
@@ -218,12 +239,14 @@ def main():
             raise ValueError("wrong_host")
         cfg = json.loads(args.config.read_text(encoding="utf-8"))
         validate_policy(cfg["policy"])
-        raw = sys.stdin.buffer.read(MAX_WIRE + 1)
-        if len(raw) > MAX_WIRE:
-            raise ValueError("request_limit")
+        raw = sys.stdin.buffer.readline(MAX_WIRE + 1)
+        if len(raw) > MAX_WIRE or not raw.endswith(b"\n"):
+            raise ValueError("control_frame_limit")
         request = json.loads(raw)
         if request.get("policy_sha256") != digest(cfg["policy"]):
             raise ValueError("policy_mismatch")
+        if request.get("operation") != "upload" and sys.stdin.buffer.read(1):
+            raise ValueError("unexpected_control_trailer")
         # 在实际调用前固定安装版本，不能仅相信状态的通用 Build 字段。
         native = Path(r"C:\Program Files\Tencent\Weixin\4.1.10.27\Weixin.dll")
         if (file_hash(native.parent.parent / "version.dll") != HOOK_MODULE
@@ -232,7 +255,9 @@ def main():
         with single_executor(cfg["state_dir"]):
             executor = Executor(Store(cfg["state_dir"]), cfg["policy"],
                                 Path(os.environ["LOCALAPPDATA"]) / "VW12-WeChatHook" / "send-approval.json")
-            if request.get("operation") == "health" and set(request) == {"operation", "policy_sha256"}:
+            if request.get("operation") == "upload" and set(request) == {"operation", "policy_sha256", "job", "role"}:
+                result = executor.upload(request["job"], request["role"], sys.stdin.buffer)
+            elif request.get("operation") == "health" and set(request) == {"operation", "policy_sha256"}:
                 result = executor.health()
             elif request.get("operation") == "dispatch" and set(request) == {"operation", "policy_sha256", "job"}:
                 result = executor.dispatch(request["job"])
