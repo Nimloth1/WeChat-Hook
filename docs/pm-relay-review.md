@@ -23,6 +23,29 @@ PM 的小麦生产仓库维持原状，三个既有渠道、采集水位和微�
 
 ## 执行与证据
 
+### VW12 对 PM 的接口
+
+`relay_guest.py` 是独立于小麦的发送端接口，不要求 PM 修改 DLL、拼许可文件或取得数据库密钥。
+当前传输是经已验证的 SSH 公钥通道发送 JSON RPC，读取单个 JSON 回执；不额外开放 HTTP 端口。
+`relay_pm.Transport.request()` 是可复用的 PM 客户端入口，既可以由本 PR 的独立 JSONL 跟随程序调用，
+也可以在小麦后续增加 `vw12` 渠道时复用。**小麦生产的 `FORWARD_CHANNEL` 目前尚未增加 vw12，
+不能把现有 JSONL 跟随程序说成已接入了生产渠道列表。** 两种 PM 输入方式不应同时开启。
+
+| operation | 请求字段 | 回执 |
+|---|---|---|
+| health | operation、policy_sha256 | 执行器启用状态、账本计数、许可存在性、DLL只读状态 |
+| dispatch | operation、policy_sha256、job | 请求ID、内容摘要、持久状态、POST尝试数；不代表送达 |
+
+`job` 的字段为 `id/recipient/source/message_id/source_ts/corporation/kind/payload`。
+文字 payload 为 `{"text":"正文"}`；图片/文件为 `{"filename":"名称","sha256":"摘要","data_b64":"内容"}`。
+目标、来源和机构必须匹配来宾的固定 policy，调用者不能临时传一个新收件人改变发送范围。
+请求ID由来源消息ID、种类和目标稳定生成。PM 客户端必须像本实现一样先持久 claim，再调用 dispatch；
+遇到丢失回执时暂停，不能套通用自动重试。旧ID再次调用只读回执，实际POST为0。
+
+因此，产品上的接入形态可以是“小麦新增一个 vw12 渠道 → 调用 VW12 接口 → DLL”。
+本 PR 已交付接口/执行器以及独立输入入口；把它挂入小麦现有渠道工厂，是另外一处小麦代码接入，
+尚未实施或部署。若需要 HTTP 形状，可另加受认证的外层，不需把 DLL 本身改成无许可网络入口。
+
 PM 使用稳定的来源消息编号/类型/目标生成请求 ID，再经固定 VW12 SSH 别名和 EncodedCommand
 调用一次性执行器。正文走 stdin，不进入 shell；VW12 执行器只接受 COMPUTERNAME=VW12。
 固定已审核 PR8 DLL 及腾讯模块 SHA256；单次执行器由 Windows 内核文件锁串行化，异常退出会释放锁。
@@ -63,7 +86,7 @@ PM 需以持久主机 LaunchAgent 运行 `relay_pm.py run`，不在沙箱/agent�
 正式启用时先对齐 PM/VW12 policy、核对新 DLL/无许可/旧标记完整，用 `baseline` 在当时EOF建立基线，
 最后由调度器启动。不得手动运行一次生产 `run` 来冒充调度器验证。
 需测量实际完整转发周期写盘，并确认日志轮转、Healthchecks/KeepAlive 探针已经覆盖新服务。
-与真人群相关的配置及原生 ID 不写入公开仓库。此次没有发布新分支、部署执行器、创建生产水位、开启调度或发送。
+与真人群相关的配置及原生 ID 不写入公开仓库。离线验证阶段没有部署执行器、创建生产水位、开启调度或发送。
 
 ## 配置与命令形状
 
