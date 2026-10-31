@@ -424,7 +424,9 @@ class Transport:
         return self.control(request)
 
 
-def dispatch_once(store, policy, transport):
+def dispatch_once(store, policy, transport, interval_seconds=0):
+    if type(interval_seconds) is not int or interval_seconds < 0:
+        raise ValueError("invalid_dispatch_interval")
     if not policy["enabled"] or store.get("paused"):
         return False
     job = store.next_job()
@@ -433,6 +435,13 @@ def dispatch_once(store, policy, transport):
     validate_job(job, policy)
     if not 0 <= time.time() - job["source_ts"] <= 86400:
         raise ValueError("pending_job_expired")
+    if interval_seconds:
+        # PM 单端计时；从上一调用完成起等待，重启后也沿用账本时间。
+        # 等待不 claim、不上传，也不把正常限速变成暂停。
+        with store.connect() as db:
+            completed = db.execute("SELECT max(completed) FROM jobs").fetchone()[0]
+        if completed is not None and time.time() - completed < interval_seconds:
+            return False
     if not store.claim(job, policy):
         return False
     diagnostics = {}
@@ -512,7 +521,7 @@ def run(cfg, store, config_path):
                     raise ValueError("configuration_changed_pause")
                 tail.poll()
                 resolve_media(store, policy, decoder)
-                if dispatch_once(store, policy, transport):
+                if dispatch_once(store, policy, transport, cfg.get("dispatch_interval_seconds", 0)):
                     print(canonical({"event": "submitted_unconfirmed", "delivery_confirmed": False}), flush=True)
                     continue
             except Exception as exc:

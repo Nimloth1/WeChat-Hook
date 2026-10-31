@@ -343,6 +343,35 @@ class RelayTest(unittest.TestCase):
         store.pause("test")
         self.assertFalse(store.claim(j, self.p))
 
+    def test_temporary_interval_waits_without_claim_and_survives_restart(self):
+        store = Store(self.root / "pm")
+        executor, hook = self.make_executor()
+        transport = mock.Mock()
+        transport.request.side_effect = lambda request: executor.dispatch(request["job"])
+        first, second = text_job("paced-1"), text_job("paced-2")
+        store.accept(first)
+        store.accept(second)
+        self.assertTrue(dispatch_once(store, self.p, transport, 60))
+        with store.connect() as db:
+            completed = db.execute("SELECT completed FROM jobs WHERE id=?", (first["id"],)).fetchone()[0]
+        store = Store(store.root)
+        before = store.path.read_bytes(), store.path.stat().st_mtime_ns
+        with mock.patch("relay_pm.time.time", return_value=completed + 59):
+            self.assertFalse(dispatch_once(store, self.p, transport, 60))
+        self.assertEqual(before, (store.path.read_bytes(), store.path.stat().st_mtime_ns))
+        self.assertIsNone(store.get("paused"))
+        self.assertEqual(transport.request.call_count, 1)
+        with mock.patch("relay_pm.time.time", return_value=completed + 60):
+            self.assertTrue(dispatch_once(store, self.p, transport, 60))
+        self.assertEqual(transport.request.call_count, 2)
+        self.assertEqual(len(hook.posts), 2)
+
+    def test_temporary_interval_rejects_invalid_values(self):
+        store = Store(self.root / "pm")
+        for value in (-1, True, "60", 1.5):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "invalid_dispatch_interval"):
+                dispatch_once(store, self.p, mock.Mock(), value)
+
     def test_diagnostics_exclude_unknown_text_and_invalid_types(self):
         self.assertEqual(hook_error_code("image_path_not_stable"), "image_path_not_stable")
         for value in ("secret_token_or_private_path", {"token": "secret"}, ["image_path_not_stable"], 1):
