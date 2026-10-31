@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import shutil
 
-from relay_common import MIN_FREE, validate_asset
+from relay_common import DIRECTORY_MODE, MIN_FREE, validate_asset
 
 BLOCK = 64 * 1024
 
@@ -21,7 +21,7 @@ def signature(st):
 def snapshot(source, destination, name, expected_size=None):
     """下载中的文件等待下轮；已读对象在读取期间变化则丢弃副本。"""
     source, destination = Path(source), Path(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    destination.parent.mkdir(parents=True, exist_ok=True, mode=DIRECTORY_MODE)
     with source.open("rb") as f:
         before = os.fstat(f.fileno())
         if expected_size is not None and before.st_size != expected_size:
@@ -55,7 +55,7 @@ def receive(stream, destination, descriptor):
     """只消费声明长度；多一个字节也拒绝，失败删除本次新建的临时文件。"""
     validate_asset(descriptor)
     destination = Path(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    destination.parent.mkdir(parents=True, exist_ok=True, mode=DIRECTORY_MODE)
     reserve(destination.parent, descriptor["size"])
     h, remaining = hashlib.sha256(), descriptor["size"]
     # 已存在文件不能被失败处理误删。

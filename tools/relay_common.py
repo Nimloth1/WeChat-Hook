@@ -3,6 +3,7 @@ from contextlib import contextmanager
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
 import shutil
@@ -15,6 +16,11 @@ MAX_WIRE = 16 * 1024 * 1024  # 控制帧内存预算；附件不再进入 JSON/b
 KINDS = {"text", "image", "file", "video", "link"}
 SOURCE_MODULE = "f487e4f56930456a25fb0d7b058c77e2dcd364e268d49bdfff4dc0e3be26ba36"
 HOOK_MODULE = "eabf566a4dc063267b1773ab7e72fa0a606a7a76983fca3daaceb5fd14741ecf"
+
+# Windows 3.13 的0700按令牌默认owner生成独立DACL；高权限SSH的owner可能是
+# Administrators，桌面同一用户因此不可读。Windows继承预配置私有根的DACL，
+# 不授予Everyone；POSIX仍使用0700。文件同卷rename会保留原ACL，须在创建时正确继承。
+DIRECTORY_MODE = 0o777 if os.name == "nt" else 0o700
 
 # 只记录 DLL 定义的固定码；不能把任意错误原文、路径或 token 写进账本。
 HOOK_ERROR_CODES = frozenset("""
@@ -206,7 +212,7 @@ class Store:
         self.root = Path(root)
         # 附件轮询只在内存中记游标；空轮询不为调度位置写盘。
         self.media_scan_after = 0
-        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.root.mkdir(parents=True, exist_ok=True, mode=DIRECTORY_MODE)
         self.path = self.root / "relay.sqlite"
         with self.connect() as db:
             db.executescript("""
