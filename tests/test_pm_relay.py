@@ -17,7 +17,8 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-from relay_common import assets, asset_path, Store, canonical, digest, file_hash, make_job, validate_job, validate_policy
+from relay_common import (assets, asset_path, Store, canonical, digest, dispatch_diagnostics,
+                          file_hash, hook_error_code, make_job, validate_job, validate_policy)
 from relay_guest import Executor as RealExecutor, assert_idle, single_executor
 from relay_pm import Decoder, Tail, dispatch_once, resolve_media
 
@@ -341,6 +342,56 @@ class RelayTest(unittest.TestCase):
         store.accept(j)
         store.pause("test")
         self.assertFalse(store.claim(j, self.p))
+
+    def test_diagnostics_exclude_unknown_text_and_invalid_types(self):
+        self.assertEqual(hook_error_code("image_path_not_stable"), "image_path_not_stable")
+        for value in ("secret_token_or_private_path", {"token": "secret"}, ["image_path_not_stable"], 1):
+            self.assertEqual(hook_error_code(value), "unrecognized_hook_error")
+        value = dispatch_diagnostics({"post_attempts": True, "http_status": 999,
+            "native_entered": "false", "replayed": 0, "response_state": {"token": "secret"},
+            "hook_error": "secret_token_or_private_path", "token": "secret"})
+        self.assertEqual(value, {"hook_error": "unrecognized_hook_error"})
+
+    def test_guest_diagnostics_never_persist_arbitrary_response_error(self):
+        executor, hook = self.make_executor()
+        original = hook.request
+        def request(*args):
+            code, response = original(*args)
+            response["error"] = "secret_token_or_private_path"
+            return code, response
+        hook.request = request
+        job = text_job()
+        result = executor.dispatch(job)
+        self.assertEqual(result["receipt"]["evidence"]["hook_error"], "unrecognized_hook_error")
+        self.assertNotIn(b"secret_token_or_private_path", executor.store.path.read_bytes())
+
+    def test_unknown_native_entry_is_not_reported_as_false(self):
+        executor, hook = self.make_executor()
+        original = hook.request
+        def request(*args):
+            original(*args)
+            return 500, {"state": "unknown", "error": "handler_exception_no_retry"}
+        hook.request = request
+        result = executor.dispatch(text_job())
+        evidence = result["receipt"]["evidence"]
+        self.assertEqual(result["receipt"]["state"], "review_required")
+        self.assertEqual(evidence["hook_error"], "handler_exception_no_retry")
+        self.assertEqual(evidence["response_state"], "unknown")
+        self.assertNotIn("native_entered", evidence)
+
+    def test_unmatched_guest_receipt_cannot_supply_diagnostics(self):
+        pm = Store(self.root / "pm")
+        job = text_job()
+        pm.accept(job)
+        transport = mock.Mock()
+        transport.request.return_value = {"receipt": {"id": "another", "digest": digest(job),
+            "state": "review_required", "evidence": {"http_status": 422,
+            "native_entered": False, "hook_error": "image_path_not_stable"}}}
+        with self.assertRaisesRegex(ValueError, "remote_result_requires_review"):
+            dispatch_once(pm, self.p, transport)
+        evidence = pm.receipt(job["id"])["evidence"]
+        self.assertNotIn("hook_error", evidence)
+        self.assertNotIn("http_status", evidence)
 
     def test_guest_exact_text_image_file_and_persistent_replay(self):
         for kind in ["text", "image", "file", "video", "link"]:

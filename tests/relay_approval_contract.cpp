@@ -1,4 +1,5 @@
-// 只解析合成许可及调用Controller的替身后端；不链接send_native.cpp，不加载/连接微信。
+// 合成许可/生产Controller/替身发送；默认不链接send_native.cpp。
+// RELAY_NATIVE_IMAGE_PREFLIGHT构建只调用生产OpenImage，不加载/连接微信。
 // macOS适配系统I/O和SHA256；Windows使用真实WinAPI和bcrypt。
 #include "send_native.h"
 #include <filesystem>
@@ -7,16 +8,28 @@
 namespace {
 struct Prepared final : send_fix::PreparedCall {
     int& calls;
+#ifdef RELAY_NATIVE_IMAGE_PREFLIGHT
+    std::unique_ptr<send_fix::LockedImage> image;
+#endif
     explicit Prepared(int& value) : calls(value) {}
     send_fix::Result Run() override {
         ++calls;
-        return {202, "unconfirmed", "offline_backend_only", true};
+        return {202, "unconfirmed", "native_result_not_delivery_receipt", true};
     }
 };
 struct Backend final : send_fix::Backend {
     int calls = 0;
-    std::unique_ptr<send_fix::PreparedCall> Prepare(const send_fix::Request&, const send_fix::Approval&) override {
-        return std::make_unique<Prepared>(calls);
+    std::string prepare_error;
+    std::unique_ptr<send_fix::PreparedCall> Prepare(const send_fix::Request& request, const send_fix::Approval&) override {
+        if (!prepare_error.empty()) throw std::runtime_error(prepare_error);
+        auto result = std::make_unique<Prepared>(calls);
+#ifdef RELAY_NATIVE_IMAGE_PREFLIGHT
+        if (request.kind == "image") {
+            // 只执行文件预检；不调用 WindowsBackend::Prepare 或任何微信函数。
+            result->image = std::make_unique<send_fix::LockedImage>(send_fix::OpenImage(request));
+        }
+#endif
+        return result;
     }
 };
 }
@@ -28,6 +41,7 @@ int main(int argc, char** argv) {
         nlohmann::json request;
         std::cin >> request;
         Backend backend;
+        backend.prepare_error = request.value("prepare_error", "");
         send_fix::Controller controller([&] { return send_fix::LoadApproval(path); }, backend,
             [&](const send_fix::Approval& approval) { return send_fix::ConsumeApproval(path, approval); });
         nlohmann::json result;

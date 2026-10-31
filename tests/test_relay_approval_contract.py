@@ -12,10 +12,11 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_pm_relay import (Executor, FakeHook, FIXTURES, event, media_job, policy, text_job)
+from test_pm_relay import (Executor, FakeHook, FIXTURES, descriptor, event, media_job, policy, text_job)
 from relay_common import Store, asset_path, assets, canonical, make_job
 from relay_pm import dispatch_once
 import relay_guest
+from relay_guest import single_executor
 
 
 class Probe:
@@ -35,6 +36,7 @@ class ContractHook(FakeHook):
         super().__init__(permit)
         self.probe = probe
         self.loaded = []
+        self.prepare_error = ""
 
     def status(self):
         status = super().status()
@@ -50,7 +52,7 @@ class ContractHook(FakeHook):
                 "/send_video_msg": "video", "/send_link_msg": "link"}[endpoint]
         self.posts.append((endpoint, copy.deepcopy(request)))
         result = self.probe.request(self.permit, {"operation": "dispatch", "authorization": "Bearer " + token,
-                                                "kind": kind, "body": request})
+                                                "kind": kind, "body": request, "prepare_error": self.prepare_error})
         if result["http"] == 202 and result["backend_calls"] != 1:
             raise AssertionError("fixture_backend_was_not_entered_once")
         return result["http"], result["response"]
@@ -81,6 +83,60 @@ class ApprovalContractTest(unittest.TestCase):
         else:
             raise unittest.SkipTest("Windows请先构建夹具并设置RELAY_APPROVAL_PROBE；不使用纯Python替代校验")
         cls.probe = Probe(executable)
+
+    @unittest.skipUnless(os.name == "nt" and os.environ.get("RELAY_NATIVE_IMAGE_PROBE"),
+                         "真实文件预检仅在PW使用WinAPI；不以替身冒充")
+    def test_real_image_preflight_in_executor_appdata_layout(self):
+        probe = Probe(Path(os.environ["RELAY_NATIVE_IMAGE_PROBE"]))
+        for data, name in ((b"\x89PNG\r\n\x1a\nfixture", "中文.png"),
+                           (b"\xff\xd8\xff" + b"\0" * (1024 * 1024 - 3), "a" * 32 + "_h.jpg")):
+            with self.subTest(name=name), tempfile.TemporaryDirectory(dir=os.environ["LOCALAPPDATA"]) as folder:
+                root = Path(folder)
+                guest = Store(root / "VW12-Relay" / "state")
+                permit = root / "VW12-WeChatHook" / "send-approval.json"
+                hook = ContractHook(permit, probe)
+                executor = Executor(guest, policy(), permit, hook, reclaim_timeout=0)
+                job = make_job(event(), policy(), "image", descriptor(data, name))
+                with single_executor(guest.root):
+                    result = executor.dispatch(job)
+                self.assertEqual(result["receipt"]["state"], "submitted_unconfirmed", result)
+                self.assertEqual(len(hook.posts), 1)
+                self.assertFalse(permit.exists())
+
+    def test_fixed_preflight_errors_reach_both_ledgers_without_retry(self):
+        for kind in ("text", "image", "file", "video", "link"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                pm, guest = Store(root / "pm"), Store(root / "guest")
+                permit = root / "permit.json"
+                hook = ContractHook(permit, self.probe)
+                hook.prepare_error = "image_path_not_stable"
+                executor = Executor(guest, policy(), permit, hook, reclaim_timeout=0)
+                job = (text_job() if kind == "text" else make_job(event(), policy(), "link", {
+                    "title": "合成卡片", "description": "", "url": "https://example.com/a"})
+                    if kind == "link" else media_job(kind))
+                pm.accept(job)
+                class Transport:
+                    def request(self, request):
+                        return executor.dispatch(request["job"])
+                with self.assertRaisesRegex(ValueError, "remote_result_requires_review"):
+                    with mock.patch("builtins.print") as output:
+                        dispatch_once(pm, policy(), Transport())
+                logged = json.loads(output.call_args.args[0])
+                self.assertEqual(logged["event"], "dispatch_failed")
+                self.assertEqual(logged["hook_error"], "image_path_not_stable")
+                for store in (pm, guest):
+                    evidence = store.receipt(job["id"])["evidence"]
+                    self.assertEqual(evidence["hook_error"], "image_path_not_stable")
+                    self.assertEqual(evidence["http_status"], 422)
+                    self.assertIs(evidence["native_entered"], False)
+                    self.assertEqual(evidence["post_attempts"], 1)
+                    self.assertEqual(evidence["response_state"], "not_attempted")
+                self.assertFalse(permit.exists())
+                self.assertFalse(Path(str(permit) + ".used-" + job["id"]).exists())
+                self.assertFalse(dispatch_once(pm, policy(), Transport()))
+                executor.dispatch(job)
+                self.assertEqual(len(hook.posts), 1)
 
     def test_all_five_types_real_cpp_accepts_and_old_expiry_pauses(self):
         for kind in ("text", "image", "file", "video", "link"):

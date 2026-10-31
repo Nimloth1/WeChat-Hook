@@ -16,6 +16,52 @@ KINDS = {"text", "image", "file", "video", "link"}
 SOURCE_MODULE = "f487e4f56930456a25fb0d7b058c77e2dcd364e268d49bdfff4dc0e3be26ba36"
 HOOK_MODULE = "eabf566a4dc063267b1773ab7e72fa0a606a7a76983fca3daaceb5fd14741ecf"
 
+# 只记录 DLL 定义的固定码；不能把任意错误原文、路径或 token 写进账本。
+HOOK_ERROR_CODES = frozenset("""
+approval_required send_in_progress_no_new_attempt authorization_failed invalid_request
+one_shot_already_used request_not_approved allocation_failed
+native_retention_budget_exceeded native_ownership_fault_requires_investigation native_collector_start_failed
+native_ownership_module_not_supported wechat_module_missing module_path_failed wechat_module_hash_mismatch
+module_version_failed wechat_version_not_4_1_10_27 module_header_failed module_architecture_failed
+function_address_not_executable data_address_not_readable send_context_unavailable
+image_requires_local_absolute_path image_path_not_stable image_file_invalid image_header_invalid
+image_format_unsupported image_hash_mismatch file_size_invalid file_read_failed file_changed hash_failed
+guid_failed attachment_hash_mismatch attachment_name_invalid attachment_requires_local_absolute_path
+attachment_path_not_stable attachment_file_invalid video_format_unsupported native_preflight_failed
+durable_approval_consume_failed native_result_not_delivery_receipt native_exception_no_retry
+native_ownership_fault_no_retry native_frame_allocation_failed_no_retry video_constructor_fault_no_retry
+video_constructor_layout_unknown_no_retry link_constructor_fault_no_retry link_constructor_layout_unknown_no_retry
+file_constructor_fault_no_retry file_constructor_layout_unknown_no_retry text_constructor_fault_no_retry
+text_constructor_layout_unknown_no_retry ownership_observer_failed_no_retry parameter_constructor_fault_no_retry
+submit_fault_no_retry source_destructor_fault_no_retry native_temporary_free_fault_no_retry
+handler_exception_no_retry unrecognized_hook_error
+""".split())
+
+
+def hook_error_code(value):
+    if value is None or value == "":
+        return None
+    return value if isinstance(value, str) and value in HOOK_ERROR_CODES else "unrecognized_hook_error"
+
+
+def dispatch_diagnostics(evidence):
+    """仅从关联正确的来宾回执保留有界执行证据，不复制任意远端字段。"""
+    if not isinstance(evidence, dict):
+        return {}
+    result = {}
+    for key in ("native_entered", "replayed"):
+        if type(evidence.get(key)) is bool:
+            result[key] = evidence[key]
+    for key, low, high in (("http_status", 100, 599), ("post_attempts", 0, 1)):
+        if type(evidence.get(key)) is int and low <= evidence[key] <= high:
+            result[key] = evidence[key]
+    if evidence.get("response_state") in ("not_attempted", "unconfirmed", "unknown"):
+        result["response_state"] = evidence["response_state"]
+    code = hook_error_code(evidence.get("hook_error"))
+    if code:
+        result["hook_error"] = code
+    return result
+
 
 def canonical(value):
     # 控制协议固定ASCII JSON；原生许可另用既有UTF-8摘要格式。

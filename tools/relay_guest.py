@@ -12,7 +12,7 @@ import time
 # 嵌入式 Python 的 ._pth 不包含脚本目录；只加入入口自身目录，不依赖 cwd/PYTHONPATH。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from relay_common import (HOOK_MODULE, MAX_WIRE, SOURCE_MODULE, Store, assets, asset_path, canonical,
-                          digest, file_hash, native_fingerprint, validate_job, validate_policy)
+                          digest, dispatch_diagnostics, file_hash, native_fingerprint, validate_job, validate_policy)
 from relay_assets import receive
 
 
@@ -195,8 +195,9 @@ class Executor:
             durable_new(client, {"id": job["id"], "fingerprint": native_fingerprint(fingerprint), "attempt": time.time()})
             evidence["post_attempts"] = 1
             code, response = self.hook.request("POST", endpoint, request, approval["token"])
-            evidence.update(http_status=code, native_entered=response.get("NativeEntered") is True,
-                            replayed=response.get("Replayed"), response_state=response.get("state"))
+            evidence.update(dispatch_diagnostics({"http_status": code,
+                "native_entered": response.get("NativeEntered"), "replayed": response.get("Replayed"),
+                "response_state": response.get("state"), "hook_error": response.get("error")}))
             if (code == 202 and response.get("NativeEntered") is True
                     and response.get("Replayed") is False and response.get("DeliveryConfirmed") is False
                     and response.get("state") == "unconfirmed" and used.is_file()):

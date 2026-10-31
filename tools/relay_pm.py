@@ -16,7 +16,7 @@ import tempfile
 import ctypes
 
 from relay_common import (MAX_WIRE, Store, assets, asset_path, canonical, digest, file_hash,
-                          make_job, validate_job, validate_policy)
+                          dispatch_diagnostics, make_job, validate_job, validate_policy)
 from relay_assets import BLOCK, reserve, signature, snapshot
 
 MAX_LINE = 1024 * 1024
@@ -435,9 +435,12 @@ def dispatch_once(store, policy, transport):
         raise ValueError("pending_job_expired")
     if not store.claim(job, policy):
         return False
+    diagnostics = {}
     try:
         result = transport.request({"operation": "dispatch", "policy_sha256": digest(policy), "job": job})
         receipt = result.get("receipt", {})
+        if receipt.get("id") == job["id"] and receipt.get("digest") == digest(job):
+            diagnostics = dispatch_diagnostics(receipt.get("evidence"))
         if (receipt.get("id") != job["id"] or receipt.get("digest") != digest(job)
                 or receipt.get("state") != "submitted_unconfirmed"
                 or receipt.get("delivery_confirmed") is not False or result.get("replayed") is not False
@@ -445,8 +448,10 @@ def dispatch_once(store, policy, transport):
             raise ValueError("remote_result_requires_review")
         store.finish(job["id"], "submitted_unconfirmed", receipt["evidence"])
     except Exception:
-        store.finish(job["id"], "review_required", {"error": "remote_result_unknown", "no_retry": True})
+        store.finish(job["id"], "review_required", {"error": "remote_result_unknown", "no_retry": True,
+                                                   **diagnostics})
         store.pause("remote_result_unknown")
+        print(canonical({"event": "dispatch_failed", "id": job["id"], **diagnostics}), flush=True)
         raise
     # 回执已持久记录；本地清理失败也不能改写成未知发送或重试。
     for role in assets(job):
