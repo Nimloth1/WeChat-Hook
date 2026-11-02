@@ -109,6 +109,8 @@ class Tail:
         # 仅存附件定位所需元数据，不复制完整聊天正文。
         small = {k: event.get(k) for k in ("conversation_id", "sender_corp", "server_id",
                                           "local_id", "ts", "image_md5", "file", "video")}
+        if kind == "image":
+            small["image_info"] = event.get("image_info")
         message_id = str(event.get("server_id") or event.get("local_id") or "")
         if not message_id:
             raise ValueError("source_missing_id")
@@ -173,7 +175,8 @@ def resolve_media(store, policy, decoder):
             raise ValueError("attachment_expired_requires_review")
         path = asset_path(store.root, key, "media")
         if item["kind"] == "image":
-            loaded = decoder.image(event["conversation_id"], event["image_md5"], path)
+            loaded = decoder.image(event["conversation_id"], event["image_md5"], path,
+                                   event.get("image_info"))
         elif item["kind"] == "video":
             loaded = decoder.video(event["video"], path, asset_path(store.root, key, "thumbnail"))
         else:
@@ -227,11 +230,12 @@ class Decoder:
         from app.ingest.image import ImageDecoder
         from Crypto.Cipher import AES
         self.decoder = ImageDecoder(cfg["account_dir"])
+        self.image_rejections = {}
         self.aes = AES
         self.ffmpeg = cfg.get("ffmpeg", "/opt/homebrew/bin/ffmpeg")
         self.ffprobe = cfg.get("ffprobe", "/opt/homebrew/bin/ffprobe")
 
-    def decode(self, path, destination):
+    def decode(self, path, destination, expected_size=None):
         from PIL import Image
         with Path(path).open("rb") as f:
             before = os.fstat(f.fileno())
@@ -241,6 +245,9 @@ class Decoder:
             aes_size, xor_size = struct.unpack("<II", header[6:14])
             padded = aes_size + 16 - aes_size % 16
             if 15 + padded + xor_size > before.st_size:
+                return None
+            # V2 明文大小可从封装长度算出；预览不解密落盘，不因轮询反复写入。
+            if expected_size is not None and before.st_size - 15 - padded + aes_size != expected_size:
                 return None
             for _ in range(2):
                 if self.decoder._key is None:
@@ -289,22 +296,46 @@ class Decoder:
             width, height = image.size
             extension = ".png" if image.format == "PNG" else ".jpg"
         return {"filename": Path(path).stem + extension, "size": destination.stat().st_size,
-                "sha256": file_hash(destination)}, (width * height, destination.stat().st_size)
+                "sha256": file_hash(destination)}, (width, height)
 
-    def image(self, conversation, md5, destination):
+    def image(self, conversation, md5, destination, info=None):
+        # 无原图长度无法证明完整；已知尺寸也必须一致。保持 waiting，不降级发送。
+        if (not isinstance(info, dict) or type(info.get("original_bytes")) is not int
+                or info["original_bytes"] <= 0
+                or any(info.get(k) is not None and
+                       (type(info[k]) is not int or info[k] <= 0) for k in ("width", "height"))):
+            return None
         destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         if destination.exists():
             raise ValueError("unresolved_spool")
         best, score = None, (0, 0)
-        for path in self.decoder.find(conversation, md5):
+        paths = self.decoder.find(conversation, md5)
+        for path in paths:
             candidate = destination.with_suffix(".candidate")
             try:
-                result = self.decode(path, candidate)
-                if result and result[1] > score:
-                    best, score = result
+                stamp = (signature(Path(path).stat()), info["original_bytes"],
+                         info.get("width"), info.get("height"))
+                if self.image_rejections.get(path) == stamp:
+                    continue
+                result = self.decode(path, candidate, info["original_bytes"])
+                if not result:
+                    continue
+                payload, (width, height) = result
+                if (payload["size"] != info["original_bytes"]
+                        or info.get("width") is not None and width != info["width"]
+                        or info.get("height") is not None and height != info["height"]):
+                    # 同一坏候选不重复解码写盘；缓存仅在内存，文件变化后重新核验。
+                    self.image_rejections[path] = stamp
+                    continue
+                candidate_score = (width * height, payload["size"])
+                if candidate_score > score:
+                    best, score = payload, candidate_score
                     os.replace(candidate, destination)
             finally:
                 candidate.unlink(missing_ok=True)
+        if best:
+            for path in paths:
+                self.image_rejections.pop(path, None)
         return best
 
     def file(self, name, size, destination):

@@ -302,7 +302,7 @@ class RelayTest(unittest.TestCase):
                 f.write(canonical(event(str(i), type=3, image_md5=md5)) + "\n")
         self.assertEqual(tail.poll(), 25)
         decoder = mock.Mock()
-        decoder.image.side_effect = lambda _, md5, path: descriptor(b"image", "image.png") if md5 in {md5s[10], md5s[24]} else None
+        decoder.image.side_effect = lambda _, md5, path, info: descriptor(b"image", "image.png") if md5 in {md5s[10], md5s[24]} else None
         for _ in range(3):
             before = decoder.image.call_count
             resolve_media(store, self.p, decoder)
