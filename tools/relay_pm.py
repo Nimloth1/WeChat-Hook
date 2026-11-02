@@ -61,9 +61,10 @@ class Tail:
     def classify(self, event):
         if not isinstance(event, dict):
             raise ValueError("source_event_not_object")
-        if (event.get("conversation_id") != self.policy["source"] or event.get("is_self")
+        if (event.get("conversation_id") != self.policy["source"]
                 or not event.get("is_chatroom")
-                or event.get("sender_corp") not in self.policy["corporations"]):
+                or self.policy["corporations"] is not None
+                and event.get("sender_corp") not in self.policy["corporations"]):
             return None, "scope"
         ts = event.get("ts")
         if type(ts) not in (float, int) or not math.isfinite(ts):
@@ -77,8 +78,10 @@ class Tail:
         if base == 1:
             text = str(event.get("content") or "")
             sender = str(event.get("sender") or "")
-            corp = "gtja sg" if event["sender_corp"].startswith("GUOTAI ") else "gtja"
-            text = f"{sender}@{corp}：{text}"
+            corp = event.get("sender_corp") or ""
+            corp = {"国泰君安期货": "gtja", "GUOTAI JUNAN FUTURES SINGAPORE": "gtja sg"}.get(corp, corp)
+            label = sender + (f"@{corp}" if corp else "")
+            text = f"{label}：{text}"
             return make_job(event, self.policy, "text", {"text": text}), "job"
         sub = event["type"] >> 32
         if base == 49 and sub in {1, 4, 5, 68}:

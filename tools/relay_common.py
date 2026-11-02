@@ -154,8 +154,10 @@ def validate_policy(policy):
             raise ValueError("invalid_group_policy")
     if policy["source"] == policy["recipient"]:
         raise ValueError("source_recipient_loop")
-    if (not isinstance(policy.get("corporations"), list) or not policy["corporations"]
-            or any(not isinstance(x, str) or not x for x in policy["corporations"])):
+    # null 显式表示来源群所有成员；旧列表配置继续按原范围校验。
+    if (policy["corporations"] is not None and
+            (not isinstance(policy["corporations"], list) or not policy["corporations"]
+             or any(not isinstance(x, str) or not x for x in policy["corporations"]))):
         raise ValueError("missing_corporation_allowlist")
     return policy
 
@@ -166,7 +168,9 @@ def validate_job(job, policy):
             "id", "recipient", "source", "message_id", "kind", "source_ts", "corporation", "payload"}
             or job["recipient"] != policy["recipient"] or job["source"] != policy["source"]
             or job["kind"] not in KINDS or type(job["source_ts"]) not in (int, float)
-            or not math.isfinite(job["source_ts"]) or job["corporation"] not in policy["corporations"]
+            or not math.isfinite(job["source_ts"])
+            or job["corporation"] is not None and not isinstance(job["corporation"], str)
+            or policy["corporations"] is not None and job["corporation"] not in policy["corporations"]
             or not isinstance(job["message_id"], str) or not job["message_id"]
             or not re.fullmatch(r"[0-9a-f]{64}", str(job["id"]))):
         raise ValueError("invalid_job")
@@ -202,7 +206,7 @@ def make_job(event, policy, kind, payload):
     job = {"id": digest(["pm-vw12-relay-v1", policy["recipient"], policy["source"], message_id, kind]),
            "recipient": policy["recipient"], "source": policy["source"],
            "message_id": message_id, "kind": kind, "source_ts": event["ts"],
-           "corporation": event["sender_corp"], "payload": payload}
+           "corporation": event.get("sender_corp"), "payload": payload}
     return validate_job(job, policy)
 
 

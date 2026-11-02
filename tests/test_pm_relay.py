@@ -235,7 +235,7 @@ class RelayTest(unittest.TestCase):
 
     def test_scope_and_unsupported_types_never_queued(self):
         _, store, tail = self.baseline()
-        for changes in [{"is_self": True}, {"conversation_id": self.p["recipient"]},
+        for changes in [{"conversation_id": self.p["recipient"]},
                         {"sender_corp": ""}, {"is_chatroom": False}, {"type": 43, "video": {}},
                         {"type": 49}, {"ts": time.time() - 86401}]:
             with self.subTest(changes=changes):
@@ -243,6 +243,66 @@ class RelayTest(unittest.TestCase):
         text, _ = tail.classify(event(content="😀" * 1200))
         self.assertEqual(text["kind"], "text")
         self.assertIn("😀" * 1200, text["payload"]["text"])
+
+    def test_all_members_policy_includes_other_companies_personal_and_self(self):
+        _, store, tail = self.baseline()
+        tail.policy = {**self.p, "corporations": None}
+        self.assertEqual(validate_policy(tail.policy), tail.policy)
+        for corp, suffix in [("国泰君安期货", "@gtja"),
+                             ("GUOTAI JUNAN FUTURES SINGAPORE", "@gtja sg"),
+                             ("其他机构", "@其他机构"), (None, ""), ("", "")]:
+            for own in (False, True):
+                with self.subTest(corp=corp, own=own):
+                    job, kind = tail.classify(event(sender_corp=corp, is_self=own))
+                    self.assertEqual(kind, "job")
+                    self.assertTrue(job["payload"]["text"].startswith("测试员" + suffix + "："))
+                    validate_job(job, tail.policy)
+        self.assertIsNone(tail.classify(event(conversation_id=self.p["recipient"]))[0])
+        for bad in ({}, 7, False, []):
+            with self.assertRaises(ValueError):
+                validate_policy({**tail.policy, "corporations": bad})
+
+    def test_all_members_guest_accepts_five_types_without_weakening_target(self):
+        all_policy = {**self.p, "corporations": None}
+        for corp in (None, "", "其他机构"):
+            for kind in ("text", "image", "file", "video", "link"):
+                with self.subTest(corp=corp, kind=kind), tempfile.TemporaryDirectory() as folder:
+                    store = Store(Path(folder)/"guest")
+                    permit = Path(folder)/"permit.json"
+                    hook = FakeHook(permit)
+                    executor = Executor(store, all_policy, permit, hook)
+                    payload = ({"text": "普通成员离线文字"} if kind == "text" else
+                               {"title": "链接", "description": "", "url": "https://example.com/report"}
+                               if kind == "link" else media_job(kind)["payload"])
+                    job = make_job(event(sender_corp=corp), all_policy, kind, payload)
+                    with self.assertRaises(ValueError):
+                        validate_job({**job, "recipient": "999999@chatroom"}, all_policy)
+                    result = executor.dispatch(job)
+                    self.assertEqual(result["receipt"]["state"], "submitted_unconfirmed")
+                    self.assertEqual(len(hook.posts), 1)
+                    self.assertEqual(executor.dispatch(job)["post_attempts"], 0)
+                    self.assertEqual(len(hook.posts), 1)
+
+    def test_all_members_scope_switch_keeps_cursor_history_and_noop_writes(self):
+        source, store, tail = self.baseline()
+        skipped = event("old-filtered", sender_corp=None)
+        source.write_text(source.read_text() + canonical(skipped) + "\n")
+        self.assertEqual(tail.poll(), 1)
+        self.assertIsNone(store.next_job())
+        cursor, activated = store.get("cursor"), store.get("activated_at")
+        tail.policy = {**self.p, "corporations": None}
+        from relay_pm import policy_scope
+        with store.connect() as db:
+            store.put(db, "policy_scope", policy_scope(tail.policy))
+        self.assertEqual(tail.poll(), 0)
+        self.assertEqual(store.get("cursor"), cursor)
+        self.assertEqual(store.get("activated_at"), activated)
+        source.write_text(source.read_text() + canonical(event("new-member", sender_corp=None)) + "\n")
+        self.assertEqual(tail.poll(), 1)
+        self.assertEqual(store.next_job()["message_id"], "new-member")
+        before = store.path.read_bytes(), store.path.stat().st_mtime_ns
+        self.assertEqual(tail.poll(), 0)
+        self.assertEqual(before, (store.path.read_bytes(), store.path.stat().st_mtime_ns))
 
     def test_cursor_and_queue_atomic_on_failure(self):
         source, store, tail = self.baseline()
