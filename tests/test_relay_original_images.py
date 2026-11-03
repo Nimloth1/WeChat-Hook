@@ -139,12 +139,56 @@ class OriginalImageTest(unittest.TestCase):
                 self.assertIsNone(self.decoder.image("group", "md5", dest, info))
                 self.assertFalse(dest.parent.exists())
 
-    def test_size_is_required_known_dimensions_are_optional(self):
+    def test_known_size_allows_optional_dimensions(self):
         data = self.png((16, 16))
         self.encrypted("full.dat", data)
         result = self.decoder.image("group", "md5", self.root / "full.bin",
                                     {"original_bytes": len(data)})
         self.assertEqual(result["sha256"], hashlib.sha256(data).hexdigest())
+
+    def test_dimensions_only_waits_for_full_resolution_and_queues_once(self):
+        full = self.png((132, 286))
+        key = self.queue({"width": 132, "height": 286})
+        self.encrypted("preview.dat", self.png((18, 40)))
+        before = self.store.path.read_bytes(), self.store.path.stat().st_mtime_ns
+        for _ in range(10):
+            resolve_media(self.store, policy(), self.decoder)
+        self.assertIsNone(self.store.next_job())
+        self.assertEqual(before, (self.store.path.read_bytes(), self.store.path.stat().st_mtime_ns))
+        self.encrypted("full.dat", full)
+        resolve_media(self.store, policy(), self.decoder)
+        job = self.store.next_job()
+        self.assertEqual(job["payload"]["sha256"], hashlib.sha256(full).hexdigest())
+        self.assertEqual(asset_path(self.store.root, key, "media").read_bytes(), full)
+        resolve_media(self.store, policy(), self.decoder)
+        self.assertEqual(self.store.status()["counts"], {"ready": 1})
+
+    def test_dimensions_only_rejects_unfinished_jpeg_and_rechecks_when_complete(self):
+        out = io.BytesIO()
+        self.image.new("RGB", (48, 96), "blue").save(out, format="JPEG")
+        full = out.getvalue()
+        self.encrypted("download.dat", full[:-2])
+        dest = self.root / "jpeg.bin"
+        info = {"width": 48, "height": 96}
+        with mock.patch.object(self.decoder, "decode", wraps=self.decoder.decode) as decode:
+            for _ in range(10):
+                self.assertIsNone(self.decoder.image("group", "md5", dest, info))
+            self.assertEqual(decode.call_count, 1)
+            self.assertFalse(dest.exists())
+            self.encrypted("download.dat", full)
+            self.assertEqual(self.decoder.image("group", "md5", dest, info)["size"], len(full))
+        self.assertEqual(dest.read_bytes(), full)
+
+    def test_dimensions_only_rejects_png_with_incomplete_iend(self):
+        full = self.png((48, 96))
+        self.encrypted("download.dat", full[:-8])
+        dest = self.root / "png.bin"
+        info = {"width": 48, "height": 96}
+        self.assertIsNone(self.decoder.image("group", "md5", dest, info))
+        self.assertFalse(dest.exists())
+        self.encrypted("download.dat", full)
+        self.assertEqual(self.decoder.image("group", "md5", dest, info)["sha256"],
+                         hashlib.sha256(full).hexdigest())
 
 
 if __name__ == "__main__":

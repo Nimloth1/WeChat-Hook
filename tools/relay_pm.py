@@ -229,6 +229,22 @@ def media_tool(command, timeout, root):
             process.wait()
 
 
+def complete_image(path):
+    """检查PNG块完整性/JPEG结束标记；不展开像素，避免大图解码内存增长。"""
+    from PIL import Image
+    try:
+        with Image.open(path) as image:
+            kind = image.format
+            image.verify()
+        if kind == "JPEG":
+            with Path(path).open("rb") as f:
+                f.seek(-2, 2)
+                return f.read(2) == b"\xff\xd9"
+        return kind == "PNG"
+    except (OSError, SyntaxError, ValueError):
+        return False
+
+
 class Decoder:
     def __init__(self, cfg):
         sys.path.insert(0, cfg["xiaomai_root"])
@@ -304,12 +320,16 @@ class Decoder:
                 "sha256": file_hash(destination)}, (width, height)
 
     def image(self, conversation, md5, destination, info=None):
-        # 无原图长度无法证明完整；已知尺寸也必须一致。保持 waiting，不降级发送。
-        if (not isinstance(info, dict) or type(info.get("original_bytes")) is not int
-                or info["original_bytes"] <= 0
+        # 源消息可能只有原始宽高。缺长度时须两维齐全且文件完整，不能接受预览。
+        if (not isinstance(info, dict)
+                or info.get("original_bytes") is not None and
+                (type(info["original_bytes"]) is not int or info["original_bytes"] <= 0)
                 or any(info.get(k) is not None and
-                       (type(info[k]) is not int or info[k] <= 0) for k in ("width", "height"))):
+                       (type(info[k]) is not int or info[k] <= 0) for k in ("width", "height"))
+                or info.get("original_bytes") is None and
+                any(info.get(k) is None for k in ("width", "height"))):
             return None
+        expected_size = info.get("original_bytes")
         destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         if destination.exists():
             raise ValueError("unresolved_spool")
@@ -318,17 +338,18 @@ class Decoder:
         for path in paths:
             candidate = destination.with_suffix(".candidate")
             try:
-                stamp = (signature(Path(path).stat()), info["original_bytes"],
+                stamp = (signature(Path(path).stat()), expected_size,
                          info.get("width"), info.get("height"))
                 if self.image_rejections.get(path) == stamp:
                     continue
-                result = self.decode(path, candidate, info["original_bytes"])
+                result = self.decode(path, candidate, expected_size)
                 if not result:
                     continue
                 payload, (width, height) = result
-                if (payload["size"] != info["original_bytes"]
+                if (expected_size is not None and payload["size"] != expected_size
                         or info.get("width") is not None and width != info["width"]
-                        or info.get("height") is not None and height != info["height"]):
+                        or info.get("height") is not None and height != info["height"]
+                        or expected_size is None and not complete_image(candidate)):
                     # 同一坏候选不重复解码写盘；缓存仅在内存，文件变化后重新核验。
                     self.image_rejections[path] = stamp
                     continue
