@@ -1,0 +1,237 @@
+{
+  "native_sample": {
+    "version": "4.1.10.27",
+    "sha256": "f487e4f56930456a25fb0d7b058c77e2dcd364e268d49bdfff4dc0e3be26ba36"
+  },
+  "sources_sha256": {
+    "src/send_ownership.inc": "d5e2adcd236f1419cb5f2dd9c8844b1378813ded1654744d75036b173d2ebcf1",
+    "tests/send_ownership_tests.cpp": "4f2bfa991da9fe83c2bbcbe7feb74c6594a70a5697e9421339ebc4c5590e37bd"
+  },
+  "baseline": {
+    "exit": 1,
+    "failure": "new slot7 CallSubmit assertion",
+    "line": 305
+  },
+  "fixed": {
+    "normal_checks": 32177,
+    "cycles": 10000,
+    "native_allocations": 213221,
+    "native_frees": 213221,
+    "native_parameter_peak_bytes": 359680,
+    "final_handle_delta": 0,
+    "card_slot7_sentinel_calls": 3,
+    "fault_modes_passed": 28
+  },
+  "runs": [
+    {
+      "Name": "baseline-build",
+      "ExitCode": 0,
+      "Expected": 0,
+      "Seconds": 13.2335146,
+      "SampledPeakTreeBytes": 251121664
+    },
+    {
+      "Name": "baseline-native",
+      "ExitCode": 1,
+      "Expected": 1,
+      "Seconds": 1.6392113,
+      "SampledPeakTreeBytes": 0
+    },
+    {
+      "Name": "ownership-build",
+      "ExitCode": 0,
+      "Seconds": 13.2294506,
+      "SampledPeakBytes": 168255488
+    },
+    {
+      "Name": "ownership-normal",
+      "ExitCode": 0,
+      "Seconds": 4.2294504,
+      "SampledPeakBytes": 8228864
+    },
+    {
+      "Name": "ownership-ctor-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2358042,
+      "SampledPeakBytes": 5873664
+    },
+    {
+      "Name": "ownership-params-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2341566,
+      "SampledPeakBytes": 5873664
+    },
+    {
+      "Name": "ownership-submit-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2368072,
+      "SampledPeakBytes": 5861376
+    },
+    {
+      "Name": "ownership-cleanup-fault",
+      "ExitCode": 0,
+      "Seconds": 0.229957,
+      "SampledPeakBytes": 5873664
+    },
+    {
+      "Name": "ownership-destroy-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2279317,
+      "SampledPeakBytes": 5865472
+    },
+    {
+      "Name": "ownership-clone-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2263493,
+      "SampledPeakBytes": 5869568
+    },
+    {
+      "Name": "ownership-metadata-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2294017,
+      "SampledPeakBytes": 5869568
+    },
+    {
+      "Name": "ownership-file-ctor-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2330068,
+      "SampledPeakBytes": 5869568
+    },
+    {
+      "Name": "ownership-file-params-fault",
+      "ExitCode": 0,
+      "Seconds": 0.23869159999999998,
+      "SampledPeakBytes": 5869568
+    },
+    {
+      "Name": "ownership-file-submit-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2338852,
+      "SampledPeakBytes": 5869568
+    },
+    {
+      "Name": "ownership-file-cleanup-fault",
+      "ExitCode": 0,
+      "Seconds": 0.23476239999999998,
+      "SampledPeakBytes": 5861376
+    },
+    {
+      "Name": "ownership-file-destroy-fault",
+      "ExitCode": 0,
+      "Seconds": 0.24023509999999998,
+      "SampledPeakBytes": 5877760
+    },
+    {
+      "Name": "ownership-file-clone-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2310147,
+      "SampledPeakBytes": 5865472
+    },
+    {
+      "Name": "ownership-file-metadata-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2278154,
+      "SampledPeakBytes": 5865472
+    },
+    {
+      "Name": "ownership-link-ctor-fault",
+      "ExitCode": 0,
+      "Seconds": 0.22216139999999998,
+      "SampledPeakBytes": 5869568
+    },
+    {
+      "Name": "ownership-link-params-fault",
+      "ExitCode": 0,
+      "Seconds": 0.22352729999999998,
+      "SampledPeakBytes": 5869568
+    },
+    {
+      "Name": "ownership-link-submit-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2595402,
+      "SampledPeakBytes": 5857280
+    },
+    {
+      "Name": "ownership-link-cleanup-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2364884,
+      "SampledPeakBytes": 5869568
+    },
+    {
+      "Name": "ownership-link-destroy-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2316073,
+      "SampledPeakBytes": 5877760
+    },
+    {
+      "Name": "ownership-link-clone-fault",
+      "ExitCode": 0,
+      "Seconds": 0.22670089999999998,
+      "SampledPeakBytes": 5861376
+    },
+    {
+      "Name": "ownership-link-metadata-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2264698,
+      "SampledPeakBytes": 5861376
+    },
+    {
+      "Name": "ownership-video-ctor-fault",
+      "ExitCode": 0,
+      "Seconds": 0.23199779999999998,
+      "SampledPeakBytes": 5869568
+    },
+    {
+      "Name": "ownership-video-params-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2340465,
+      "SampledPeakBytes": 5865472
+    },
+    {
+      "Name": "ownership-video-submit-fault",
+      "ExitCode": 0,
+      "Seconds": 0.22494499999999998,
+      "SampledPeakBytes": 5869568
+    },
+    {
+      "Name": "ownership-video-cleanup-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2366894,
+      "SampledPeakBytes": 5865472
+    },
+    {
+      "Name": "ownership-video-destroy-fault",
+      "ExitCode": 0,
+      "Seconds": 0.24271689999999999,
+      "SampledPeakBytes": 5869568
+    },
+    {
+      "Name": "ownership-video-clone-fault",
+      "ExitCode": 0,
+      "Seconds": 0.2371119,
+      "SampledPeakBytes": 5865472
+    },
+    {
+      "Name": "ownership-video-metadata-fault",
+      "ExitCode": 0,
+      "Seconds": 0.227906,
+      "SampledPeakBytes": 5861376
+    }
+  ],
+  "candidate_compile": [
+    {
+      "Name": "candidate-dll-build",
+      "ExitCode": 0,
+      "Expected": 0,
+      "Seconds": 18.1652473,
+      "SampledPeakTreeBytes": 247930880
+    },
+    {
+      "Hash": "F6AA6A8F25FCDE160475BA03174A710779AF514566C86049628CB75FFEB12927"
+    }
+  ],
+  "live_native_send_tested": false,
+  "candidate_deployed": false,
+  "real_queued_business_body_executed": false,
+  "whole_dll_regression_suite_run": false
+}

@@ -29,7 +29,8 @@ struct OwnershipRecord {
     OwnershipRecord* next = nullptr;
     std::uint64_t control = 0, original_control = 0, original_image = 0;
     std::uint64_t expected_control = 0, expected_image = 0;
-    std::uint64_t control_table[5]{}, image_table[8]{}; // 含 [-1] RTTI；保留其余槽。
+    std::uint64_t control_table[5]{}, image_table[9]{}; // 含 [-1] RTTI；卡片有8个方法。
+    std::size_t image_slots = 7; // 图片/文件/视频为7，卡片为8，克隆须继承。
     std::shared_ptr<RequestLease> lease;
     std::atomic<bool> destroyed{false};
     bool image = false;
@@ -78,11 +79,13 @@ public:
         record->control_table[1] = reinterpret_cast<std::uint64_t>(&ObservedMessageDestroy);
         if (image) {
             record->original_image = *reinterpret_cast<std::uint64_t*>(control+16);
-            if ((record->expected_image && record->expected_image != record->original_image)
-                || record->original_image < 8 || !MemoryRange(record->original_image-8,64,false))
+            if ((record->image_slots != 7 && record->image_slots != 8)
+                || (record->expected_image && record->expected_image != record->original_image)
+                || record->original_image < 8
+                || !MemoryRange(record->original_image-8,(record->image_slots+1)*8,false))
                 throw std::runtime_error("ownership_image_type_mismatch");
             std::memcpy(record->image_table,reinterpret_cast<const std::uint64_t*>(record->original_image)-1,
-                sizeof(record->image_table));
+                (record->image_slots+1)*8);
             record->image_table[5] = reinterpret_cast<std::uint64_t>(&ObservedImageClone);
         }
         std::lock_guard<std::mutex> lock(mutex_);
@@ -107,6 +110,7 @@ public:
     void* Clone(std::uint64_t object,std::uint64_t* out) noexcept {
         std::shared_ptr<RequestLease> lease;
         std::uint64_t function = 0, expected_control = 0, expected_image = 0;
+        std::size_t image_slots = 7;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             auto record = Find(object-16);
@@ -115,6 +119,7 @@ public:
             function = reinterpret_cast<const std::uint64_t*>(record->original_image)[4];
             expected_control=record->original_control;
             expected_image=record->original_image;
+            image_slots=record->image_slots;
         }
         // 在原生克隆前预留记录。内存不足时保守保留文件锁、禁止后续请求，
         // 仍让原生函数自行处理本次克隆，不把空指针伪装成成功结果。
@@ -126,6 +131,7 @@ public:
             child->lease = lease;
             child->expected_control=expected_control;
             child->expected_image=expected_image;
+            child->image_slots=image_slots;
             try { Observe(child.get(),out[1],true); child.release(); }
             catch (...) { Poison(lease); }
         }
@@ -218,6 +224,7 @@ struct NativePrepared : PreparedCall {
         record->expected_control=request.kind == "video" ? address.video_vtable : request.kind == "link" ? address.link_vtable : request.kind == "file" ? address.file_vtable :
             request.kind == "image" ? address.image_vtable : address.text_vtable;
         record->expected_image=request.kind == "video" ? address.video_vtable2 : request.kind == "link" ? address.link_vtable2 : request.kind == "file" ? address.file_vtable2 : address.image_vtable2;
+        record->image_slots=request.kind == "link" ? 8 : 7;
         Frame frame;
         LinkStrings link_strings;
         WideString thumbnail{};
