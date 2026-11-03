@@ -411,18 +411,18 @@ class RelayTest(unittest.TestCase):
         first, second = text_job("paced-1"), text_job("paced-2")
         store.accept(first)
         store.accept(second)
-        self.assertTrue(dispatch_once(store, self.p, transport, 60))
+        self.assertTrue(dispatch_once(store, self.p, transport, 10))
         with store.connect() as db:
             completed = db.execute("SELECT completed FROM jobs WHERE id=?", (first["id"],)).fetchone()[0]
         store = Store(store.root)
         before = store.path.read_bytes(), store.path.stat().st_mtime_ns
-        with mock.patch("relay_pm.time.time", return_value=completed + 59):
-            self.assertFalse(dispatch_once(store, self.p, transport, 60))
+        with mock.patch("relay_pm.time.time", return_value=completed + 9):
+            self.assertFalse(dispatch_once(store, self.p, transport, 10))
         self.assertEqual(before, (store.path.read_bytes(), store.path.stat().st_mtime_ns))
         self.assertIsNone(store.get("paused"))
         self.assertEqual(transport.request.call_count, 1)
-        with mock.patch("relay_pm.time.time", return_value=completed + 60):
-            self.assertTrue(dispatch_once(store, self.p, transport, 60))
+        with mock.patch("relay_pm.time.time", return_value=completed + 10):
+            self.assertTrue(dispatch_once(store, self.p, transport, 10))
         self.assertEqual(transport.request.call_count, 2)
         self.assertEqual(len(hook.posts), 2)
 
@@ -612,15 +612,48 @@ class RelayTest(unittest.TestCase):
         card, kind = tail.classify(event(type=(5 << 32) | 49,
             content="[文章] 能化周报\nhttps://example.com/report?a=1&b=2"))
         self.assertEqual(kind, "job")
-        self.assertEqual(card["kind"], "link")
-        self.assertEqual(card["payload"], {"title": "能化周报", "description": "",
-                                         "url": "https://example.com/report?a=1&b=2"})
+        self.assertEqual(card["kind"], "text")
+        self.assertEqual(card["payload"], {"text": "测试员@gtja：能化周报\nhttps://example.com/report?a=1&b=2"})
         video, kind = tail.classify(event(type=43, video={"md5": "a" * 32, "size": 123}))
         self.assertEqual(kind, "media")
         self.assertEqual(video["kind"], "video")
         for url in ["file:///private/data", "https://user@host/a", "https://host:0/", "https://host/a b"]:
-            with self.subTest(url=url), self.assertRaises(ValueError):
-                tail.classify(event(type=(5 << 32) | 49, content="[文章] 周报\n" + url))
+            # 这里只发送普通文字，不打开URL或构造原生卡片，保留来源原文。
+            with self.subTest(url=url):
+                text, _ = tail.classify(event(type=(5 << 32) | 49, content="[文章] 周报\n" + url))
+                self.assertEqual(text["payload"]["text"], "测试员@gtja：周报\n" + url)
+
+    def test_link_fallback_uses_text_endpoint_and_only_one_attempt(self):
+        _, store, tail = self.baseline()
+        for subtype in (1, 4, 5, 68):
+            with self.subTest(subtype=subtype):
+                job, kind = tail.classify(event(str(subtype), type=(subtype << 32) | 49,
+                    content="[链接] 标题\nhttps://example.com/report"))
+                self.assertEqual(kind, "job")
+                self.assertEqual(job["kind"], "text")
+                with tempfile.TemporaryDirectory() as folder:
+                    guest = Store(Path(folder)/"guest")
+                    permit = Path(folder)/"permit.json"
+                    hook = FakeHook(permit)
+                    executor = Executor(guest, self.p, permit, hook)
+                    self.assertEqual(executor.dispatch(job)["post_attempts"], 1)
+                    self.assertEqual(hook.posts[0][0], "/SendTextMsg")
+                    self.assertEqual(executor.dispatch(job)["post_attempts"], 0)
+                    self.assertEqual(len(hook.posts), 1)
+
+    def test_link_fallback_cannot_replay_prior_native_card(self):
+        _, store, tail = self.baseline()
+        for old_state in ("submitted_unconfirmed", "review_required", "closed_unknown_no_retry"):
+            with self.subTest(old_state=old_state):
+                e = event(old_state, type=(5 << 32) | 49, content="[文章] 旧卡片\nhttps://example.com/report")
+                job = make_job(e, self.p, "link", {"title": "旧卡片", "description": "",
+                                                 "url": "https://example.com/report"})
+                store.accept(job)
+                with store.connect() as db:
+                    db.execute('UPDATE jobs SET state=? WHERE id=?', (old_state, job["id"]))
+                before = store.path.read_bytes(), store.path.stat().st_mtime_ns
+                self.assertEqual(tail.classify(e), (None, "prior_link_record"))
+                self.assertEqual(before, (store.path.read_bytes(), store.path.stat().st_mtime_ns))
 
     def test_real_offline_mp4_probe_and_jpeg_thumbnail(self):
         ffmpeg, ffprobe = "/opt/homebrew/bin/ffmpeg", "/opt/homebrew/bin/ffprobe"

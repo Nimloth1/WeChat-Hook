@@ -75,24 +75,26 @@ class Tail:
         if type(event.get("type")) is not int:
             raise ValueError("invalid_source_type")
         base = event["type"] & 0xFFFFFFFF
-        if base == 1:
+        sub = event["type"] >> 32
+        link_as_text = base == 49 and sub in {1, 4, 5, 68}
+        if link_as_text:
+            # 旧卡片已进入调用但可能未送达，不能改成文字ID后绕过旧的防重放记录。
+            message_id = str(event.get("server_id") or event.get("local_id") or "")
+            previous = digest(["pm-vw12-relay-v1", self.policy["recipient"], self.policy["source"],
+                               message_id, "link"])
+            if self.store.receipt(previous):
+                return None, "prior_link_record"
+        if base == 1 or link_as_text:
             text = str(event.get("content") or "")
+            if link_as_text:
+                # 直接转发已采集的标题和URL；不再进入尚未验证的原生卡片调用。
+                text = re.sub(r"^\[(链接|文章|应用消息)\]\s*", "", text)
             sender = str(event.get("sender") or "")
             corp = event.get("sender_corp") or ""
             corp = {"国泰君安期货": "gtja", "GUOTAI JUNAN FUTURES SINGAPORE": "gtja sg"}.get(corp, corp)
             label = sender + (f"@{corp}" if corp else "")
             text = f"{label}：{text}"
             return make_job(event, self.policy, "text", {"text": text}), "job"
-        sub = event["type"] >> 32
-        if base == 49 and sub in {1, 4, 5, 68}:
-            # 小麦现有 JSONL 仅保留渲染标题和最后一行 URL；不反查聊天库。
-            content = str(event.get("content") or "")
-            title, separator, url = content.rpartition("\n")
-            title = re.sub(r"^\[(链接|文章|应用消息)\]\s*", "", title)
-            if not separator:
-                raise ValueError("source_link_missing_url")
-            return make_job(event, self.policy, "link", {
-                "title": title, "description": "", "url": url}), "job"
         if base == 3 and re.fullmatch(r"[0-9a-f]{32}", str(event.get("image_md5") or "")):
             kind = "image"
         elif base == 49 and event.get("file") and not event.get("video"):
