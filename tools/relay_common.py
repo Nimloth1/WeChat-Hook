@@ -15,7 +15,7 @@ MIN_FREE = 1024 * 1024 * 1024
 MAX_WIRE = 16 * 1024 * 1024  # 控制帧内存预算；附件不再进入 JSON/base64。
 KINDS = {"text", "image", "file", "video", "link"}
 SOURCE_MODULE = "f487e4f56930456a25fb0d7b058c77e2dcd364e268d49bdfff4dc0e3be26ba36"
-HOOK_MODULE = "eabf566a4dc063267b1773ab7e72fa0a606a7a76983fca3daaceb5fd14741ecf"
+HOOK_MODULE = "f6aa6a8f25fcde160475ba03174a710779af514566c86049628cb75ffeb12927"
 
 # Windows 3.13 的0700按令牌默认owner生成独立DACL；高权限SSH的owner可能是
 # Administrators，桌面同一用户因此不可读。Windows继承预配置私有根的DACL，
