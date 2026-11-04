@@ -12,6 +12,11 @@ void* operator new(std::size_t n,const std::nothrow_t&) noexcept {
     try{return ::operator new(n);}catch(...){return nullptr;}
 }
 static std::size_t checks=0;
+static std::atomic<std::size_t> card_tail_calls{0};
+static void __fastcall ProbeCardTail(std::uint64_t object,std::uint64_t output) {
+    *reinterpret_cast<std::uint64_t*>(output)=object;
+    ++card_tail_calls;
+}
 void CheckAt(bool ok,int line) { ++checks;if(!ok) throw std::runtime_error("ownership_line_"+std::to_string(line)); }
 #define Check(ok) CheckAt((ok),__LINE__)
 Request Text(int n,std::size_t length=17) {
@@ -293,17 +298,29 @@ int wmain(int argc,wchar_t** argv) {
         }
         {
             auto r=Link(45);
+            // 只替换具体业务体，实际构造/影子表/原生克隆/回收仍使用生产代码。
+            f.Patch(0x18e5290,reinterpret_cast<void*>(&ProbeCardTail));
+            auto tail = [&](std::uint64_t object) {
+                std::uint64_t output=0;
+                Check(CallSubmit(f.Q(f.Q(object)+0x38),object,reinterpret_cast<std::uint64_t>(&output)));
+                Check(output==object);
+                Check(f.Q(f.Q(object)+0x38)==NativeFixture::base+0x18e5290);
+            };
             {NativePrepared p(r,NativeFixture::base,f.Addresses(),LockedImage{},budget);
              Check(p.Run().error=="native_result_not_delivery_receipt");}
             auto task=f.TakeTask();auto object=f.Q(f.Q(task+8));
+            tail(object);
             Check(f.Q(object+0xd8)==0x500000031);
             Check(NarrowAt(object,0xb0)==r.recipient && NarrowAt(object,0x708)==r.title
                 && NarrowAt(object,0x728)==r.description && NarrowAt(object,0x798)==r.value);
             auto child=Clone(f,object),grandchild=Clone(f,child+16);
+            tail(child+16);
             f.DeleteTask(task);NativeOwnership().Collect();
             Check(NarrowAt(grandchild+16,0x708)==r.title && NarrowAt(grandchild+16,0x728)==r.description
                 && NarrowAt(grandchild+16,0x798)==r.value);
             f.Release(child);NativeOwnership().Collect();Check(budget.Usage().bytes==128*1024);
+            tail(grandchild+16);
+            Check(card_tail_calls==3);
             f.Release(grandchild);NativeOwnership().Collect();Check(f.Live()==0 && budget.Usage().bytes==0);
         }
         // 各扩展名使用同一附件对象；原生克隆保持实际文件名/扩展名和内容摘要。
