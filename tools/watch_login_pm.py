@@ -9,6 +9,13 @@ import time
 
 STATE = Path('/Volumes/ssd/data/vw12-relay/login-watch.json')
 REMOTE_STATUS = r'C:\Users\maegl\Downloads\VW12-Setup\login-monitor\status.json'
+LOG = Path('/Volumes/ssd/data/vw12-relay/logs/login-watch.log')
+# 需连续 N 轮才确认并提醒的状态（SSH/窗口偶发抖动）；登录提示类仍首轮即提醒。
+DEBOUNCED = {'unobservable'}
+try:
+    CONFIRM_ROUNDS = max(1, int(os.environ.get('VW12_LOGIN_CONFIRM_ROUNDS', '2')))
+except ValueError:
+    CONFIRM_ROUNDS = 2
 ALERTS = {
     'security_relogin_prompt': ('VW12：疑似微信安全登录提示',
         '本地OCR识别到安全/重新登录提示，请查看 VW12 并自行确认登录。未自动扫码、重开或重试消息。'),
@@ -76,11 +83,46 @@ def notify(title, body):
     return result.returncode == 0
 
 
-def update(path, status, send=notify):
+def log(line):
+    try:
+        LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(LOG, 'a') as f:
+            f.write(datetime.now().astimezone().isoformat(timespec='seconds') + ' ' + line + '\n')
+    except OSError:
+        pass
+
+
+def save(path, state):
+    text = json.dumps(state, ensure_ascii=False, sort_keys=True) + '\n'
+    if path.exists() and path.read_text() == text:
+        return
+    temporary = path.with_suffix('.tmp')
+    with open(temporary, 'w', opener=lambda p, flags: os.open(p, flags, 0o600)) as f:
+        f.write(text)
+    temporary.replace(path)
+
+
+def update(path, status, send=notify, rounds=None):
+    rounds = CONFIRM_ROUNDS if rounds is None else rounds
     previous = json.loads(path.read_text()) if path.exists() else {}
     # 同状态不改文件、不重复通知，通知失败由既有 Healthchecks 报警。
     if previous.get('status') == status:
+        if 'pending' in previous:
+            # 单次抖动已自愈：只清掉待确认计数，既不告警也不发恢复通知。
+            log('jitter %s cleared at %d/%d, still %s' % (
+                previous['pending'], previous.get('pending_count', 0), rounds, status))
+            previous = {k: v for k, v in previous.items() if k not in ('pending', 'pending_count')}
+            save(path, previous)
         return previous.get('notification_failed', False)
+    # 已有确认状态时，抖动类状态需连续 rounds 轮才确认；未确认前保持原状态、不通知。
+    if status in DEBOUNCED and 'status' in previous:
+        count = previous.get('pending_count', 0) + 1 if previous.get('pending') == status else 1
+        if count < rounds:
+            log('jitter %s %d/%d (confirmed %s), not notified' % (
+                status, count, rounds, previous['status']))
+            save(path, dict(previous, pending=status, pending_count=count))
+            return previous.get('notification_failed', False)
+    log('confirmed %s (was %s)' % (status, previous.get('status')))
     state = {'status': status, 'notification_failed': False}
     if status in ALERTS:
         title, body = ALERTS[status]
@@ -92,18 +134,10 @@ def update(path, status, send=notify):
         state['notification_failed'] = True
     else:
         title = body = None
-    def save():
-        text = json.dumps(state, ensure_ascii=False, sort_keys=True) + '\n'
-        if path.exists() and path.read_text() == text:
-            return
-        temporary = path.with_suffix('.tmp')
-        with open(temporary, 'w', opener=lambda p, flags: os.open(p, flags, 0o600)) as f:
-            f.write(text)
-        temporary.replace(path)
-    save()
+    save(path, state)
     if title:
         state['notification_failed'] = not send(title, body)
-        save()
+        save(path, state)
     return state['notification_failed']
 
 

@@ -11,6 +11,10 @@ spec.loader.exec_module(watch)
 
 
 class LoginWatchTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        watch.LOG = Path(self.tmp.name) / 'login-watch.log'
+
     def report(self, **changes):
         return dict(version=1, computer='VW12', session=2, process_count=5,
                     observed_utc=datetime.fromtimestamp(1000, timezone.utc).isoformat(),
@@ -62,6 +66,34 @@ class LoginWatchTests(unittest.TestCase):
             self.assertTrue(watch.update(p, 'login_prompt', send))
             self.assertEqual(len(calls), 1)
             self.assertTrue(json.loads(p.read_text())['notification_failed'])
+
+    def run_states(self, states, rounds=2):
+        p = Path(self.tmp.name) / 'state.json'; calls = []
+        send = lambda title, body: calls.append(title) or True
+        for state in states:
+            watch.update(p, state, send, rounds)
+        return p, calls
+
+    def test_single_unobservable_jitter_is_silent_both_ways(self):
+        ok = 'no_login_prompt_observed'
+        p, calls = self.run_states([ok, 'unobservable', ok, 'unobservable', ok])
+        self.assertEqual(calls, [])
+        self.assertEqual(json.loads(p.read_text()), {'status': ok, 'notification_failed': False})
+        self.assertIn('jitter unobservable 1/2', watch.LOG.read_text())
+
+    def test_consecutive_unobservable_alerts_then_recovers(self):
+        ok = 'no_login_prompt_observed'
+        _, calls = self.run_states([ok, 'unobservable', 'unobservable', 'unobservable', ok])
+        self.assertEqual(calls, [watch.ALERTS['unobservable'][0], 'VW12：登录提示已消失'])
+
+    def test_rounds_one_keeps_immediate_alert(self):
+        _, calls = self.run_states(['no_login_prompt_observed', 'unobservable'], rounds=1)
+        self.assertEqual(len(calls), 1)
+
+    def test_login_prompt_not_debounced_and_jitter_does_not_clear_it(self):
+        _, calls = self.run_states(['no_login_prompt_observed', 'login_prompt',
+                                    'unobservable', 'login_prompt'])
+        self.assertEqual(calls, [watch.ALERTS['login_prompt'][0]])
 
 
 if __name__ == '__main__':
