@@ -177,7 +177,13 @@ def resolve_media(store, policy, decoder):
         item = json.loads(payload)
         event = item["event"]
         if time.time() - event["ts"] > 86400:
-            raise ValueError("attachment_expired_requires_review")
+            # 从未进入发送调用，只把这一条标为过期并提醒，不暂停其余消息。
+            with store.connect() as db:
+                db.execute("BEGIN IMMEDIATE")
+                db.execute("UPDATE media SET state='expired' WHERE id=? AND state='waiting'", (key,))
+            print(canonical({"event": "attachment_expired", "id": key, "kind": item["kind"]}), flush=True)
+            notify_expired(item)
+            continue
         path = asset_path(store.root, key, "media")
         if item["kind"] == "image":
             loaded = decoder.image(event["conversation_id"], event["image_md5"], path,
@@ -333,7 +339,7 @@ class Decoder:
         destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         if destination.exists():
             raise ValueError("unresolved_spool")
-        best, score = None, (0, 0)
+        best, score = None, (False, 0, 0)
         paths = self.decoder.find(conversation, md5)
         for path in paths:
             candidate = destination.with_suffix(".candidate")
@@ -346,14 +352,17 @@ class Decoder:
                 if not result:
                     continue
                 payload, (width, height) = result
-                if (expected_size is not None and payload["size"] != expected_size
-                        or info.get("width") is not None and width != info["width"]
-                        or info.get("height") is not None and height != info["height"]
-                        or expected_size is None and not complete_image(candidate)):
+                dims_ok = ((info.get("width") is None or width == info["width"])
+                           and (info.get("height") is None or height == info["height"]))
+                # 企业微信发送方的 tpwidth/tpheight 常是缩放后的气泡尺寸；
+                # 原图字节数完全一致且文件完整时，不再因宽高不符永远等待。
+                if (expected_size is not None and (payload["size"] != expected_size
+                                                   or not dims_ok and not complete_image(candidate))
+                        or expected_size is None and (not dims_ok or not complete_image(candidate))):
                     # 同一坏候选不重复解码写盘；缓存仅在内存，文件变化后重新核验。
                     self.image_rejections[path] = stamp
                     continue
-                candidate_score = (width * height, payload["size"])
+                candidate_score = (dims_ok, width * height, payload["size"])
                 if candidate_score > score:
                     best, score = payload, candidate_score
                     os.replace(candidate, destination)
@@ -525,6 +534,19 @@ def dispatch_once(store, policy, transport, interval_seconds=0):
     if assets(job):
         asset_path(store.root, job["id"], "media").parent.rmdir()
     return True
+
+
+def notify_expired(item):
+    """单条附件过期只提醒一次；通知失败不影响其余消息。"""
+    kind = {"image": "图片", "file": "文件", "video": "视频"}.get(item["kind"], item["kind"])
+    when = time.strftime("%m-%d %H:%M", time.gmtime(item["event"]["ts"] + 8 * 3600))
+    try:
+        subprocess.run(["/opt/homebrew/bin/python3", str(Path.home() / ".local/bin/bark-notify.py"),
+            "--title", "VW12 转发跳过一条附件", "--body",
+            f"{when} 的{kind}超过 24 小时仍未就绪，已跳过（从未发送，不会重发），其余消息照常转发。",
+            "--group", "xiaomai", "--level", "active"], capture_output=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def notify_pause(store):

@@ -110,8 +110,10 @@ class OriginalImageTest(unittest.TestCase):
         self.assertFalse(dest.exists())
         self.assertFalse(dest.with_suffix(".candidate").exists())
 
-    def test_matching_size_wrong_dimensions_waits_without_repeated_writes(self):
-        wrong, full = self.png((32, 48), 400), self.png((64, 24), 400)
+    def test_matching_size_incomplete_wrong_dimensions_waits_without_repeated_writes(self):
+        full = self.png((64, 24), 400)
+        broken = self.png((32, 48))[:-12]
+        wrong = broken + b"\0" * (len(full) - len(broken))
         self.assertEqual(len(wrong), len(full))
         info = {"original_bytes": len(full), "width": 64, "height": 24}
         path = self.encrypted("same-size.dat", wrong)
@@ -126,6 +128,32 @@ class OriginalImageTest(unittest.TestCase):
             self.assertEqual(self.decoder.image("group", "md5", dest, info)["size"], len(full))
             self.assertEqual(decode.call_count, 2)
         self.assertEqual(dest.read_bytes(), full)
+
+    def test_exact_size_complete_original_accepted_despite_scaled_dimensions(self):
+        # 企业微信发送方：tpwidth/tpheight 为 99x180 气泡尺寸，原图 1080x1964 且字节一致。
+        full = self.png((108, 196))
+        info = {"original_bytes": len(full), "width": 10, "height": 18}
+        key = self.queue(info)
+        self.encrypted("preview.dat", self.png((44, 80)))
+        self.encrypted("image_h.dat", full)
+        resolve_media(self.store, policy(), self.decoder)
+        job = self.store.next_job()
+        self.assertEqual(job["payload"]["sha256"], hashlib.sha256(full).hexdigest())
+        self.assertEqual(asset_path(self.store.root, key, "media").read_bytes(), full)
+
+    def test_expired_attachment_skips_only_itself_without_pause(self):
+        key = self.queue({"original_bytes": 12345, "width": 16, "height": 16})
+        later = __import__("time").time() + 86401
+        with mock.patch("relay_pm.time.time", return_value=later), \
+                mock.patch("relay_pm.notify_expired") as notify:
+            resolve_media(self.store, policy(), self.decoder)
+            resolve_media(self.store, policy(), self.decoder)
+        self.assertEqual(notify.call_count, 1)
+        self.assertIsNone(self.store.get("paused"))
+        self.assertIsNone(self.store.next_job())
+        with self.store.connect() as db:
+            self.assertEqual(db.execute("SELECT state FROM media WHERE id=?", (key,)).fetchone()[0],
+                             "expired")
 
     def test_missing_or_invalid_metadata_never_falls_back(self):
         data = self.png((16, 16))
