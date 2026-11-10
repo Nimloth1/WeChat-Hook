@@ -520,6 +520,17 @@ class RelayTest(unittest.TestCase):
                 self.assertEqual(len(hook.posts), 1)
                 assets = list((store.root / "assets").glob("*/*/*"))
                 self.assertEqual(len(assets), 1 if mode == "pending" else 0)
+                evidence = store.receipt(j["id"])["evidence"]
+                if mode == "pending":
+                    self.assertEqual(evidence["reclaim_error"], "resources_not_reclaimed")
+                    self.assertGreaterEqual(evidence["reclaim_elapsed_ms"], 0)
+                    self.assertEqual(evidence["reclaim_last_status"], {
+                        "PendingMessageOwners": 1, "RetainedParameterBytes": 0,
+                        "RetainedPayloadHandles": 0, "SendInProgress": False,
+                        "NativeOwnershipFault": False, "SendApprovalConfigured": False,
+                    })
+                else:
+                    self.assertNotIn("reclaim_error", evidence)
                 executor.dispatch(j)  # 只查旧回执，不重复发送。
                 with self.assertRaises(ValueError):
                     executor.dispatch(text_job("next"))

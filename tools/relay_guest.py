@@ -91,19 +91,38 @@ class Executor:
         self.hook = hook or Hook()
         self.reclaim_timeout = reclaim_timeout
 
-    def wait_reclaimed(self):
-        deadline = time.monotonic() + self.reclaim_timeout
-        while True:
-            status = self.hook.status()
-            if status.get("NativeOwnershipFault") is not False:
-                raise ValueError("native_ownership_fault")
-            if (status.get("PendingMessageOwners") == 0 and status.get("RetainedParameterBytes") == 0
-                    and status.get("RetainedPayloadHandles") == 0 and status.get("SendInProgress") is False):
-                assert_idle(status)
-                return
-            if time.monotonic() >= deadline:
-                raise ValueError("resources_not_reclaimed")
-            time.sleep(1)
+    def wait_reclaimed(self, evidence):
+        started = time.monotonic()
+        deadline = started + self.reclaim_timeout
+        status = {}
+        try:
+            while True:
+                status = self.hook.status()
+                if status.get("NativeOwnershipFault") is not False:
+                    raise ValueError("native_ownership_fault")
+                if (status.get("PendingMessageOwners") == 0 and status.get("RetainedParameterBytes") == 0
+                        and status.get("RetainedPayloadHandles") == 0 and status.get("SendInProgress") is False):
+                    assert_idle(status)
+                    return
+                if time.monotonic() >= deadline:
+                    raise ValueError("resources_not_reclaimed")
+                time.sleep(1)
+        except Exception as exc:
+            # 只在失败回执里保存固定错误码及最近一次状态，不记录原始响应或异常正文。
+            code = str(exc) if type(exc) is ValueError else ""
+            evidence["reclaim_error"] = code if code in {
+                "resources_not_reclaimed", "native_ownership_fault", "hook_not_idle_locked",
+                "hook_status_unavailable",
+            } else "reclaim_check_failed"
+            evidence["reclaim_elapsed_ms"] = round((time.monotonic() - started) * 1000)
+            evidence["reclaim_last_status"] = {
+                key: status[key] for key, expected in (
+                    ("PendingMessageOwners", int), ("RetainedParameterBytes", int),
+                    ("RetainedPayloadHandles", int), ("SendInProgress", bool),
+                    ("NativeOwnershipFault", bool), ("SendApprovalConfigured", bool),
+                ) if type(status.get(key)) is expected
+            }
+            raise
 
     def health(self):
         return {"enabled": self.policy["enabled"], "recipient": self.policy["recipient"],
@@ -215,7 +234,7 @@ class Executor:
                 if temp.exists():
                     temp.unlink()
                 # 只在引用/句柄均归零且无故障时删除本条临时资产。
-                self.wait_reclaimed()
+                self.wait_reclaimed(evidence)
                 for asset in materialized:
                     asset.unlink()
                     asset.parent.rmdir()
