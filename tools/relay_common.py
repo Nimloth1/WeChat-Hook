@@ -216,6 +216,8 @@ class Store:
         self.root = Path(root)
         # 附件轮询只在内存中记游标；空轮询不为调度位置写盘。
         self.media_scan_after = 0
+        # 上传阶段连续失败计数，只在内存中；重启后清零。
+        self.staging_failures = 0
         self.root.mkdir(parents=True, exist_ok=True, mode=DIRECTORY_MODE)
         self.path = self.root / "relay.sqlite"
         with self.connect() as db:
@@ -304,6 +306,14 @@ class Store:
                 raise ValueError("unresolved_attempt")
             return db.execute("UPDATE jobs SET state='dispatching',attempt=? WHERE id=? AND state='ready'",
                               (now, job["id"])).rowcount == 1
+
+    def release(self, job_id):
+        """仅用于确认发送调用尚未发出的失败：把 dispatching 放回 ready，不留未知结果。"""
+        with self.connect() as db:
+            n = db.execute("UPDATE jobs SET state='ready',attempt=NULL WHERE id=? AND state='dispatching'",
+                           (job_id,)).rowcount
+            if n != 1:
+                raise ValueError("bad_transition")
 
     def finish(self, job_id, state, evidence):
         if state not in {"submitted_unconfirmed", "review_required"}:

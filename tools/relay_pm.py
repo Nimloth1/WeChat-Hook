@@ -21,6 +21,20 @@ from relay_assets import BLOCK, reserve, signature, snapshot
 
 MAX_LINE = 1024 * 1024
 STOP = False
+# 上传阶段（尚未发出 dispatch 调用）连续失败达到此数才暂停；每次间隔为主循环的 5 秒。
+STAGING_RETRIES = 3
+
+
+class StagingError(Exception):
+    """附件上传到来宾机失败。此时还没有发送调用，来宾失败即删除半成品，可以安全重试。"""
+
+
+def log_detail(exc):
+    """只记异常类型和 ValueError 的固定错误码；其他异常文本可能带命令行，不写日志。"""
+    detail = {"error_type": type(exc).__name__}
+    if type(exc) is ValueError and exc.args and isinstance(exc.args[0], str):
+        detail["detail"] = exc.args[0][:80]
+    return detail
 
 
 def policy_scope(policy):
@@ -485,8 +499,15 @@ class Transport:
 
     def request(self, request):
         if request.get("operation") == "dispatch":
+            done = 0
             for role, descriptor in assets(request["job"]).items():
-                self.upload(request, role, descriptor)
+                try:
+                    self.upload(request, role, descriptor)
+                except Exception as exc:
+                    if done:
+                        raise  # 已有一个资产落在来宾机，重传会因独占创建被拒，保守按未知处理
+                    raise StagingError(type(exc).__name__) from exc
+                done += 1
         return self.control(request)
 
 
@@ -522,12 +543,24 @@ def dispatch_once(store, policy, transport, interval_seconds=0):
                 or result.get("post_attempts") != 1):
             raise ValueError("remote_result_requires_review")
         store.finish(job["id"], "submitted_unconfirmed", receipt["evidence"])
-    except Exception:
+    except StagingError as exc:
+        # 附件还没传完，发送调用没有发出：放回待发队列重试；连续失败才暂停，且不标未知。
+        store.release(job["id"])
+        store.staging_failures += 1
+        print(canonical({"event": "staging_failed", "id": job["id"], "attempt": store.staging_failures,
+                         "cause": str(exc)}), flush=True)
+        if store.staging_failures >= STAGING_RETRIES:
+            store.staging_failures = 0
+            store.pause("guest_unreachable_before_dispatch")
+            print(canonical({"event": "paused", "error_type": "StagingError", "no_retry": False}), flush=True)
+        return False
+    except Exception as exc:
         store.finish(job["id"], "review_required", {"error": "remote_result_unknown", "no_retry": True,
                                                    **diagnostics})
         store.pause("remote_result_unknown")
-        print(canonical({"event": "dispatch_failed", "id": job["id"], **diagnostics}), flush=True)
+        print(canonical({"event": "dispatch_failed", "id": job["id"], **diagnostics, **log_detail(exc)}), flush=True)
         raise
+    store.staging_failures = 0
     # 回执已持久记录；本地清理失败也不能改写成未知发送或重试。
     for role in assets(job):
         asset_path(store.root, job["id"], role).unlink()
@@ -605,7 +638,7 @@ def run(cfg, store, config_path):
                     continue
             except Exception as exc:
                 store.pause("relay_error_" + type(exc).__name__)
-                print(canonical({"event": "paused", "error_type": type(exc).__name__, "no_retry": True}), flush=True)
+                print(canonical({"event": "paused", "no_retry": True, **log_detail(exc)}), flush=True)
             time.sleep(5)
 
 

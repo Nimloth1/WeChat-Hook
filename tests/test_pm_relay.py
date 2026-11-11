@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from relay_common import (assets, asset_path, Store, canonical, digest, dispatch_diagnostics,
                           file_hash, hook_error_code, make_job, validate_job, validate_policy)
 from relay_guest import Executor as RealExecutor, assert_idle, single_executor
-from relay_pm import Decoder, Tail, dispatch_once, resolve_media
+from relay_pm import Decoder, StagingError, Tail, Transport, dispatch_once, log_detail, resolve_media
 
 
 def policy():
@@ -725,6 +725,57 @@ class RelayTest(unittest.TestCase):
         self.assertEqual(before, (store.path.read_bytes(), store.path.stat().st_mtime_ns))
         with self.assertRaisesRegex(ValueError, "scope_changed"):
             upgrade(store, previous, {**self.p, "recipient": "99999@chatroom"})
+
+    def test_staging_failure_releases_job_and_retries_without_unknown_state(self):
+        store = Store(self.root / "store")
+        j = text_job()
+        store.accept(j)
+        ok = {"receipt": {"id": j["id"], "digest": digest(j), "state": "submitted_unconfirmed",
+                          "delivery_confirmed": False, "evidence": {"http_status": 202}},
+              "replayed": False, "post_attempts": 1}
+        transport = mock.Mock()
+        transport.request.side_effect = [StagingError("ValueError"), StagingError("ValueError"), ok]
+        self.assertFalse(dispatch_once(store, self.p, transport))
+        self.assertEqual(store.receipt(j["id"])["state"], "ready")
+        self.assertIsNone(store.get("paused"))
+        self.assertFalse(dispatch_once(store, self.p, transport))
+        self.assertTrue(dispatch_once(store, self.p, transport))
+        self.assertEqual(store.receipt(j["id"])["state"], "submitted_unconfirmed")
+        self.assertEqual(store.staging_failures, 0)
+
+    def test_repeated_staging_failures_pause_loudly_but_job_stays_ready(self):
+        store = Store(self.root / "store")
+        j = text_job()
+        store.accept(j)
+        transport = mock.Mock()
+        transport.request.side_effect = StagingError("ValueError")
+        for _ in range(3):
+            self.assertFalse(dispatch_once(store, self.p, transport))
+        self.assertEqual(store.get("paused"), "guest_unreachable_before_dispatch")
+        self.assertEqual(store.receipt(j["id"])["state"], "ready")
+        self.assertFalse(dispatch_once(store, self.p, transport))
+        self.assertEqual(transport.request.call_count, 3)
+
+    def test_transport_only_wraps_failures_before_any_asset_landed(self):
+        job = media_job()
+        request = {"operation": "dispatch", "job": job}
+        transport = object.__new__(Transport)
+        with mock.patch.object(Transport, "upload", side_effect=ValueError("ssh_request_unknown_no_retry")), \
+                mock.patch.object(Transport, "control") as control:
+            with self.assertRaises(StagingError):
+                transport.request(request)
+            control.assert_not_called()
+        with mock.patch.object(Transport, "upload"), \
+                mock.patch.object(Transport, "control", side_effect=ValueError("ssh_request_unknown_no_retry")):
+            with self.assertRaises(ValueError) as caught:
+                transport.request(request)
+            self.assertNotIsInstance(caught.exception, StagingError)
+
+    def test_log_detail_keeps_only_fixed_codes(self):
+        self.assertEqual(log_detail(ValueError("guest_rejected_no_retry")),
+                         {"error_type": "ValueError", "detail": "guest_rejected_no_retry"})
+        self.assertEqual(log_detail(subprocess.TimeoutExpired(["ssh", "-EncodedCommand", "secret"], 15)),
+                         {"error_type": "TimeoutExpired"})
 
     def test_pm_success_and_timeout_no_retry(self):
         for fail in [False, True]:
