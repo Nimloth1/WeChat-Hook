@@ -20,7 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from relay_common import (assets, asset_path, Store, canonical, digest, dispatch_diagnostics,
                           file_hash, hook_error_code, make_job, validate_job, validate_policy)
 from relay_guest import Executor as RealExecutor, assert_idle, single_executor
-from relay_pm import Decoder, StagingError, Tail, Transport, dispatch_once, log_detail, resolve_media
+from relay_pm import (Decoder, NotReached, StagingError, Tail, Transport, dispatch_once, log_detail,
+                      not_reached, resolve_media)
 
 
 def policy():
@@ -770,6 +771,26 @@ class RelayTest(unittest.TestCase):
             with self.assertRaises(ValueError) as caught:
                 transport.request(request)
             self.assertNotIsInstance(caught.exception, StagingError)
+
+    def test_only_pre_auth_ssh_failures_are_safe_to_retry(self):
+        banner = b"Connection timed out during banner exchange\nConnection to UNKNOWN port 65535 timed out\n"
+        self.assertTrue(not_reached(255, banner))
+        self.assertTrue(not_reached(1, b"VW12 address lookup through PW failed: x\nCannot resolve VW12 through PW or PWT."))
+        self.assertFalse(not_reached(0, banner))
+        self.assertFalse(not_reached(255, b"client_loop: send disconnect: Broken pipe\n"))
+        self.assertFalse(not_reached(255, b""))
+        transport = object.__new__(Transport)
+        transport.command = ["ssh"]
+        done = subprocess.CompletedProcess([], 255, b"", banner)
+        with mock.patch("relay_pm.subprocess.run", return_value=done), mock.patch("relay_pm.time.sleep"):
+            with self.assertRaises(NotReached):
+                transport.control({"operation": "health"})
+            with self.assertRaises(StagingError):  # 文字任务无资产：三次控制调用都没连上
+                transport.request({"operation": "dispatch", "job": text_job()})
+        broken = subprocess.CompletedProcess([], 255, b"", b"client_loop: send disconnect: Broken pipe\n")
+        with mock.patch("relay_pm.subprocess.run", return_value=broken):
+            with self.assertRaises(ValueError):
+                transport.control({"operation": "health"})
 
     def test_log_detail_keeps_only_fixed_codes(self):
         self.assertEqual(log_detail(ValueError("guest_rejected_no_retry")),

@@ -25,6 +25,18 @@ STOP = False
 STAGING_RETRIES = 3
 
 
+class NotReached(Exception):
+    """SSH 在认证前失败（横幅超时、地址解析失败）；来宾机没有执行任何代码，可以安全重试。"""
+
+
+# 只收确定发生在认证之前的 ssh/代理错误文本；其余非零退出（如连接中途断开）仍按结果未知。
+PRE_AUTH_MARKERS = (b"timed out during banner exchange", b"VW12 address lookup", b"Cannot resolve VW12")
+
+
+def not_reached(code, stderr):
+    return bool(code) and any(m in (stderr or b"") for m in PRE_AUTH_MARKERS)
+
+
 class StagingError(Exception):
     """附件上传到来宾机失败。此时还没有发送调用，来宾失败即删除半成品，可以安全重试。"""
 
@@ -451,7 +463,7 @@ class Transport:
                   "& " + literal(cfg["guest_python"]) + " -B " + literal(cfg["guest_script"])
                   + " --config " + literal(cfg["guest_config"]) + ";exit $LASTEXITCODE")
         encoded = base64.b64encode(script.encode("utf-16le")).decode()
-        self.command = ["/usr/bin/ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+        self.command = ["/usr/bin/ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=45",
                         "VW12", "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
 
     def control(self, request):
@@ -459,6 +471,8 @@ class Transport:
         if len(raw) > MAX_WIRE:
             raise ValueError("control_memory_budget")
         r = subprocess.run(self.command, input=raw, capture_output=True, timeout=90)
+        if not_reached(r.returncode, r.stderr):
+            raise NotReached()
         return self.response(r.returncode, r.stdout)
 
     @staticmethod
@@ -493,6 +507,8 @@ class Transport:
             wire.seek(0)
             # 大文件传输仅受实际超时约束；失败后不再进入 dispatch、不自动重传。
             r = subprocess.run(self.command, stdin=wire, capture_output=True, timeout=900)
+            if not_reached(r.returncode, r.stderr):
+                raise NotReached()
             result = self.response(r.returncode, r.stdout)
         if result.get("uploaded") != descriptor["sha256"]:
             raise ValueError("upload_receipt_mismatch")
@@ -508,7 +524,15 @@ class Transport:
                         raise  # 已有一个资产落在来宾机，重传会因独占创建被拒，保守按未知处理
                     raise StagingError(type(exc).__name__) from exc
                 done += 1
-        return self.control(request)
+        for attempt in range(3):
+            try:
+                return self.control(request)
+            except NotReached:
+                time.sleep(2)
+        # 三次都没连上来宾机，发送调用从未发出。已有资产留在来宾机时重传会被拒，改按保守的未知处理。
+        if done:
+            raise ValueError("guest_unreachable_after_upload")
+        raise StagingError("NotReached")
 
 
 def dispatch_once(store, policy, transport, interval_seconds=0):
