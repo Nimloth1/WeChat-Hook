@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from relay_common import (assets, asset_path, Store, canonical, digest, dispatch_diagnostics,
                           file_hash, hook_error_code, make_job, validate_job, validate_policy)
 from relay_guest import Executor as RealExecutor, assert_idle, single_executor
-from relay_pm import (Decoder, NotReached, StagingError, Tail, Transport, dispatch_once, log_detail,
+from relay_pm import (Decoder, complete_image, NotReached, StagingError, Tail, Transport, dispatch_once, log_detail,
                       not_reached, resolve_media)
 
 
@@ -791,6 +791,23 @@ class RelayTest(unittest.TestCase):
         with mock.patch("relay_pm.subprocess.run", return_value=broken):
             with self.assertRaises(ValueError):
                 transport.control({"operation": "health"})
+
+    def test_complete_image_accepts_jpeg_wrapper_trailer_but_not_truncation(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("PIL unavailable")
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = io.BytesIO()
+            Image.effect_noise((64, 64), 80).convert("RGB").save(raw, "JPEG")
+            data = raw.getvalue()
+            self.assertTrue(data.endswith(b"\xff\xd9"))
+            cases = {"plain": (data, True), "trailer24": (data + bytes(range(24)), True),
+                     "trailer_too_long": (data + bytes(200), False), "truncated": (data[:-40], False)}
+            for name, (blob, expected) in cases.items():
+                path = Path(tmp) / f"{name}.jpg"
+                path.write_bytes(blob)
+                self.assertIs(complete_image(path), expected, name)
 
     def test_log_detail_keeps_only_fixed_codes(self):
         self.assertEqual(log_detail(ValueError("guest_rejected_no_retry")),

@@ -261,6 +261,9 @@ def media_tool(command, timeout, root):
             process.wait()
 
 
+JPEG_TRAILER_MAX = 64
+
+
 def complete_image(path):
     """检查PNG块完整性/JPEG结束标记；不展开像素，避免大图解码内存增长。"""
     from PIL import Image
@@ -269,9 +272,11 @@ def complete_image(path):
             kind = image.format
             image.verify()
         if kind == "JPEG":
+            # 微信 V2 解出的 JPEG 在结束标记后常带几十字节封装尾巴；
+            # 截断文件不会在末尾附近出现结束标记。
             with Path(path).open("rb") as f:
-                f.seek(-2, 2)
-                return f.read(2) == b"\xff\xd9"
+                f.seek(-JPEG_TRAILER_MAX, 2)
+                return b"\xff\xd9" in f.read()
         return kind == "PNG"
     except (OSError, SyntaxError, ValueError):
         return False
